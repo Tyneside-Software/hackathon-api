@@ -2,8 +2,10 @@
 
 Python FastAPI backend for tonight’s hackathon. Hosted on **Google Cloud Run**.
 
-**Repo:** https://github.com/michaelthomsoncc/hackathon-api  
-**Site:** https://github.com/michaelthomsoncc/hackathon-site
+**Repo:** https://github.com/Tyneside-Software/hackathon-api  
+**Site:** https://github.com/Tyneside-Software/hackathon-site
+
+To run **site + API** together, clone both as siblings and from the site folder run `.\start.ps1`.
 
 ## Local
 
