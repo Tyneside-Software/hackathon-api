@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 app = FastAPI(title="Hackathon API", version=VERSION)
 
