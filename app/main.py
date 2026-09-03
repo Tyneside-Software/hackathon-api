@@ -1,20 +1,20 @@
 """Hackathon API — FastAPI for Cloud Run."""
 from __future__ import annotations
+
 import os
-import string
 from datetime import datetime, timezone
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
-from google.cloud import datastore
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 app = FastAPI(title="Hackathon API", version=VERSION)
 
 _raw = os.getenv(
     "CORS_ORIGINS",
-    "http://127.0.0.1:5500,http://localhost:5500,https://michaelthomsoncc.github.io",
+    "http://127.0.0.1:5500,http://localhost:5500,"
+    "https://hackathon.tyneside.software,https://michaelthomsoncc.github.io",
 )
 origins = [o.strip() for o in _raw.split(",") if o.strip()]
 app.add_middleware(
@@ -29,7 +29,13 @@ app.add_middleware(
 
 @app.get("/")
 def root() -> dict:
-    return {"service": "hackathon-api", "docs": "/docs", "health": "/health", "version": VERSION}
+    return {
+        "service": "hackathon-api",
+        "docs": "/docs",
+        "health": "/health",
+        "test_field": "/test_field",
+        "version": VERSION,
+    }
 
 
 @app.get("/health")
@@ -44,6 +50,8 @@ def health() -> dict:
 @app.post("/create_field")
 def create_field(key, value) -> dict:
     """Create a new field in the firestore database called hackathon-firestore."""
+    from google.cloud import datastore
+
     client = datastore.Client()
     key = client.key("Field")
     entity = datastore.Entity(key=key)
