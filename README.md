@@ -1,11 +1,30 @@
 # hackathon-api
 
-Python FastAPI backend for tonight’s hackathon. Hosted on **Google Cloud Run**.
+Python **FastAPI** backend for the Tyneside Logistics hackathon. Hosted on **Google Cloud Run** (`europe-west2`). Push to `main` deploys.
 
 **Repo:** https://github.com/Tyneside-Software/hackathon-api  
-**Site:** https://github.com/Tyneside-Software/hackathon-site
+**Site:** https://github.com/Tyneside-Software/hackathon-site  
+**Live site:** https://hackathon.tyneside.software  
 
 To run **site + API** together, clone both as siblings and from the site folder run `.\start.ps1`.
+
+## Documentation
+
+| Doc | Contents |
+|-----|----------|
+| [docs/STACK.md](docs/STACK.md) | FastAPI, Uvicorn, Docker, CORS, routes |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Local, Cloud Run, env vars, health |
+| Site JS layer | Alpine.js — [hackathon-site/docs/JAVASCRIPT.md](https://github.com/Tyneside-Software/hackathon-site/blob/main/docs/JAVASCRIPT.md) |
+
+## Tech stack (short)
+
+- Python 3.12, FastAPI, Uvicorn
+- `Dockerfile` → Cloud Run
+- CORS via `CORS_ORIGINS`
+- `VERSION` on `/` and `/health` (now `0.1.0`)
+- No database yet
+
+The site is static HTML + **Alpine.js 3** + Leaflet. This API must stay a boring JSON service those pages can `fetch`.
 
 ## Local
 
@@ -18,19 +37,37 @@ uvicorn app.main:app --reload --port 8080
 
 - Health: http://127.0.0.1:8080/health  
 - Docs: http://127.0.0.1:8080/docs  
+- Root: http://127.0.0.1:8080/
 
-## Cloud Run (London)
+## Routes
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/` | service, docs, health, version |
+| GET | `/health` | `ok`, service, utc, version |
+
+New routes: add them in `app/main.py`, keep `/health` free of extra dependencies, and extend CORS methods if you need more than GET/POST.
+
+## CORS
+
+Set `CORS_ORIGINS` to a comma-separated list. Production must include:
+
+```
+https://hackathon.tyneside.software,http://127.0.0.1:5500,http://localhost:5500
+```
+
+The site reads the API base from `hackathon-site/config.js` (`window.HACKATHON_API`).
+
+## Cloud Run
+
+See [docs/DEPLOY.md](docs/DEPLOY.md). Short form:
 
 ```powershell
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
-
 gcloud run deploy hackathon-api `
   --source . `
   --region europe-west2 `
   --allow-unauthenticated `
-  --set-env-vars "CORS_ORIGINS=https://michaelthomsoncc.github.io,http://127.0.0.1:5500,http://localhost:5500"
+  --set-env-vars "CORS_ORIGINS=https://hackathon.tyneside.software,http://127.0.0.1:5500,http://localhost:5500"
 ```
 
-Paste the service URL into `hackathon-site/config.js` as `window.HACKATHON_API`.
+Paste the service URL into the site `config.js` for Pages.
