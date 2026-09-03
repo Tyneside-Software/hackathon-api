@@ -19,7 +19,8 @@ To run **site + API** together, clone both as siblings and from the site folder 
 ## Tech stack (short)
 
 - Python 3.12, FastAPI, Uvicorn
-- `Dockerfile` → Cloud Run
+- `Dockerfile` (Cloud Build) **and** root `main.py` + `Procfile` (buildpacks from GitHub)
+- Cloud Run
 - CORS via `CORS_ORIGINS`
 - `VERSION` on `/` and `/health` (now `0.1.0`)
 - No database yet

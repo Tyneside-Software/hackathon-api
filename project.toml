@@ -1,0 +1,9 @@
+# Google Cloud buildpacks (used when Cloud Run builds from GitHub
+# without honouring the Dockerfile). Pin Python and the ASGI command.
+[[build.env]]
+name = "GOOGLE_RUNTIME_VERSION"
+value = "3.12"
+
+[[build.env]]
+name = "GOOGLE_ENTRYPOINT"
+value = "uvicorn app.main:app --host 0.0.0.0 --port 8080"
