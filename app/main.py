@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Hackathon API", version="0.1.0")
+VERSION = "0.1.0"
+
+app = FastAPI(title="Hackathon API", version=VERSION)
 
 _raw = os.getenv(
     "CORS_ORIGINS",
@@ -27,7 +29,7 @@ app.add_middleware(
 
 @app.get("/")
 def root() -> dict:
-    return {"service": "hackathon-api", "docs": "/docs", "health": "/health"}
+    return {"service": "hackathon-api", "docs": "/docs", "health": "/health", "version": VERSION}
 
 
 @app.get("/health")
@@ -36,4 +38,5 @@ def health() -> dict:
         "ok": True,
         "service": "hackathon-api",
         "utc": datetime.now(timezone.utc).isoformat(),
+        "version": VERSION,
     }
