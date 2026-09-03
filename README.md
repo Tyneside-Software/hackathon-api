@@ -18,7 +18,7 @@ To run **site + API** together, clone both as siblings and from the site folder 
 
 ## Tech stack (short)
 
-- Python 3.12, FastAPI, Uvicorn
+- Python 3.13 on Cloud Run buildpacks (ubuntu2404; 3.12 is not available there), FastAPI, Uvicorn
 - `Dockerfile` (Cloud Build) **and** root `main.py` + `Procfile` (buildpacks from GitHub)
 - Cloud Run
 - CORS via `CORS_ORIGINS`

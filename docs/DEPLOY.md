@@ -65,8 +65,8 @@ Typical causes for this repo:
 | Symptom in Cloud Build | Cause | What we ship |
 |------------------------|--------|----------------|
 | `ModuleNotFoundError: No module named 'main'` or gunicorn/`uvicorn main:app` | Buildpacks default to a **root** `main.py`. Ours lived only in `app/main.py`. | Root `main.py` re-exports `app`. `Procfile` + `project.toml` set `uvicorn app.main:app`. |
-| `toomanyrequests` / failed to pull `python:3.12-slim` | Docker Hub rate limit from Cloud Build IPs | Dockerfile `FROM mirror.gcr.io/library/python:3.12-slim` |
-| Pip / runtime mismatch on 3.13–3.14 | Buildpacks default Python is newer than the original 3.12 image | `.python-version` and `GOOGLE_RUNTIME_VERSION` = `3.12` |
+| `toomanyrequests` / failed to pull `python:3.12-slim` | Docker Hub rate limit from Cloud Build IPs | Dockerfile `FROM mirror.gcr.io/library/python:3.12-slim` (only if the trigger uses Docker, not pack) |
+| `invalid Python version specified: 3.12` against ubuntu2404 | GitHub → Cloud Run uses **buildpacks** (`gcr.io/k8s-skaffold/pack`). That OS only ships **3.13 and 3.14**. | `.python-version` and `GOOGLE_RUNTIME_VERSION` = `3.13` |
 
 In the Cloud Run service → **Edit & deploy new revision** → **Build**: check whether it says Dockerfile or Buildpacks. Either should now work.
 
