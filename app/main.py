@@ -1,12 +1,12 @@
 """Hackathon API — FastAPI for Cloud Run."""
-
 from __future__ import annotations
-
 import os
+import string
 from datetime import datetime, timezone
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+from google.cloud import datastore
 
 VERSION = "0.1.0"
 
@@ -40,3 +40,20 @@ def health() -> dict:
         "utc": datetime.now(timezone.utc).isoformat(),
         "version": VERSION,
     }
+
+@app.post("/create_field")
+def create_field(key, value) -> dict:
+    """Create a new field in the firestore database called hackathon-firestore."""
+    client = datastore.Client()
+    key = client.key("Field")
+    entity = datastore.Entity(key=key)
+    entity.update({
+        "name": "New Field",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    client.put(entity)
+    return {"ok": True, "message": "Field created", "field_id": entity.key.id}
+
+@app.get("/test_field")
+def test_field() -> dict:
+    return {"ok": True, "key": "example_key", "value": "example_value"}
