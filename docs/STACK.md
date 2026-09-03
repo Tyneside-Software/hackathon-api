@@ -1,93 +1,86 @@
 # Tech stack — hackathon-api
 
-Python FastAPI service for the Tyneside Logistics hackathon. Sibling of [hackathon-site](https://github.com/Tyneside-Software/hackathon-site).
+Python FastAPI for the Tyneside Logistics hackathon. Sibling of [hackathon-site](https://github.com/Tyneside-Software/hackathon-site).
+
+The **human-facing** picture of both repos is the site wiki: [Architecture](https://hackathon.tyneside.software/docs/#architecture).
 
 ## At a glance
 
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Language | Python 3.12 | Matches the Cloud Run image |
-| Framework | FastAPI `>=0.115,<0.117` | `/docs`, typing, CORS middleware |
-| Server | Uvicorn `[standard]` `>=0.34,<0.36` | ASGI; `--reload` locally |
-| Container | `python:3.12-slim` | `Dockerfile` in repo root |
-| Hosting | Cloud Run `europe-west2` | Push to `main` deploys |
-| Auth (now) | None (`--allow-unauthenticated`) | Hackathon demo |
-| Persistence (now) | None | `/` and `/health` only; card 11 adds routes |
+| Layer | Choice | Notes |
+|-------|--------|--------|
+| Language | Python **3.13** on Cloud Run | Buildpacks / ubuntu2404. Laptop may be 3.12 or 3.14. |
+| Framework | FastAPI `>=0.115,<0.117` | `/docs`, CORS middleware |
+| Server | Uvicorn `[standard]` | ASGI; `--reload` locally |
+| Datastore | `google-cloud-datastore` | Only `/create_field`; imported inside the handler |
+| Host | Cloud Run `europe-west2` | Push `main` → GitHub trigger |
+| Builder | **Buildpacks** (`pack`) | GitHub CD **ignores** the Dockerfile |
+| Auth | None | `--allow-unauthenticated` |
 
-No Django, Flask, or database yet. Do not add Redis/Postgres unless a board card says so.
+Keep `/health` and `/test_field` free of Datastore. Do not add Redis or Postgres unless a board card says so.
 
 ## Layout
 
 ```
 hackathon-api/
-  app/
-    __init__.py
-    main.py          # FastAPI app, CORS, routes
-  Dockerfile
+  app/main.py         FastAPI app, CORS, VERSION, routes
+  main.py             Re-export `app` for pack’s `main:app`
+  Procfile            uvicorn app.main:app --port $PORT
+  project.toml        GOOGLE_RUNTIME_VERSION=3.13 + entrypoint
+  .python-version     3.13
+  Dockerfile          Docker-trigger only (mirror.gcr.io python 3.12-slim)
   requirements.txt
-  README.md
   docs/
 ```
 
-Entry point: `app.main:app`.
+ASGI object: `app.main:app` (and `main:app` via the root re-export).
 
 ## Dependencies
-
-From `requirements.txt`:
 
 ```
 fastapi>=0.115.0,<0.117
 uvicorn[standard]>=0.34.0,<0.36
+google-cloud-datastore
 ```
 
 Install in a venv. Do not commit `.venv`.
 
-## HTTP surface
+## HTTP
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/` | `{ service, docs, health, version }` |
-| GET | `/health` | `{ ok, service, utc, version }` |
-| GET | `/docs` | Swagger UI (FastAPI default) |
-| GET | `/openapi.json` | OpenAPI schema |
+| Method | Path | Body |
+|--------|------|------|
+| GET | `/` | `service`, `docs`, `health`, `test_field`, `version` |
+| GET | `/health` | `ok`, `service`, `utc`, `version` |
+| GET | `/test_field` | `ok`, `key`, `value` |
+| POST | `/create_field` | Datastore entity (needs GCP credentials) |
+| GET | `/docs` | Swagger |
+| GET | `/openapi.json` | OpenAPI |
 
-`VERSION` in `app/main.py` (currently `0.1.0`) is returned on `/` and `/health` so deploys are identifiable.
-
-Allowed methods on CORS: `GET`, `POST`, `OPTIONS`. New write routes should stay on `POST` (or add `PUT`/`PATCH` in CORS when you need them).
+`VERSION` is in `app/main.py` (currently **0.1.3**). CORS methods: `GET`, `POST`, `OPTIONS`.
 
 ## CORS
 
-Environment variable `CORS_ORIGINS` — comma-separated origins, no trailing slashes.
-
-Default if unset:
+`CORS_ORIGINS` — comma-separated, no trailing slashes. If the env var is **set on Cloud Run**, it **replaces** the code defaults. Production must include:
 
 ```
-http://127.0.0.1:5500,http://localhost:5500,https://michaelthomsoncc.github.io
+https://hackathon.tyneside.software
+http://127.0.0.1:5500
+http://localhost:5500
 ```
 
-Live site origin is **`https://hackathon.tyneside.software`**. Cloud Run must include that or the browser will block `fetch`. Also keep localhost for `start.ps1`.
+## Site config
 
-`allow_credentials=False`. Headers: `Content-Type`, `Accept`. `max_age=600`.
+The browser reads `window.HACKATHON_API` from `hackathon-site/config.js` (Cloud Run URL in git). Local override: `http://127.0.0.1:8080`.
 
-## Config the site uses
+## Dockerfile (optional path)
 
-The site reads `window.HACKATHON_API` from `hackathon-site/config.js`.
+Used only if the Cloud Run trigger is Docker, not pack.
 
-- Local: `http://127.0.0.1:8080`
-- Live: the Cloud Run HTTPS URL
+- Base: `mirror.gcr.io/library/python:3.12-slim` (Hub cache; avoids `toomanyrequests`)
+- `PORT` default 8080; Cloud Run injects `PORT`
+- `CMD` Uvicorn on `0.0.0.0:${PORT}`
 
-## Container
+Do not bind to `127.0.0.1` in the container.
 
-`Dockerfile`:
+## Board follow-on
 
-- Base `python:3.12-slim`
-- `PORT` default `8080` (Cloud Run injects `PORT`)
-- `CMD` runs Uvicorn on `0.0.0.0:${PORT}`
-
-Do not listen on `127.0.0.1` in the container.
-
-## What comes next (board)
-
-- Card 11: persist routes (replace `localStorage`). In-memory is acceptable for the night if two requests to the same instance work — say so on the card. If the API is down, the map must still work.
-
-Keep `/health` cheap and dependency-free so Cloud Run and the team can probe it.
+Card 11: persist routes. In-memory is acceptable for the night if two requests hit the same instance — say so on the card. If the API is down, the map must still work.
