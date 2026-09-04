@@ -27,7 +27,7 @@ hackathon-api/
   Procfile            uvicorn app.main:app --port $PORT
   project.toml        GOOGLE_RUNTIME_VERSION=3.13 + entrypoint
   .python-version     3.13
-  Dockerfile          Docker-trigger only (mirror.gcr.io python 3.12-slim)
+  Dockerfile          Docker-trigger only (mirror.gcr.io python 3.13-slim)
   requirements.txt
   docs/
 ```
@@ -75,7 +75,7 @@ The browser reads `window.HACKATHON_API` from `hackathon-site/config.js` (Cloud 
 
 Used only if the Cloud Run trigger is Docker, not pack.
 
-- Base: `mirror.gcr.io/library/python:3.12-slim` (Hub cache; avoids `toomanyrequests`)
+- Base: `mirror.gcr.io/library/python:3.13-slim` (Hub cache; avoids `toomanyrequests`)
 - `PORT` default 8080; Cloud Run injects `PORT`
 - `CMD` Uvicorn on `0.0.0.0:${PORT}`
 

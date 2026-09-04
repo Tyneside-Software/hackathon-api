@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Hackathon API — FastAPI for Cloud Run."""
 from __future__ import annotations
 
@@ -88,3 +89,11 @@ def view_field(key: str) -> dict:
 @app.get("/test_field")
 def test_field() -> dict:
     return {"ok": True, "key": "example_key", "value": "example_value"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Pass the app object (not "app.main:app") so this works when the
+    # Cloud Build trigger execs GOOGLE_ENTRYPOINT=app/main.py.
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))

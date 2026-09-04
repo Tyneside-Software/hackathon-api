@@ -62,7 +62,8 @@ Do not enable `allow_credentials` unless origins are locked tightly.
 |----------|--------|-------------|
 | `gcr.io/k8s-skaffold/pack` then `invalid Python version specified: 3.12` | ubuntu2404 has no 3.12 | `.python-version` / `GOOGLE_RUNTIME_VERSION` = `3.13` |
 | `No module named 'main'` / `uvicorn main:app` | Pack looks at repo-root `main.py` | Root `main.py` re-exports `app` |
-| `toomanyrequests` pulling `python:3.12-slim` | Docker Hub rate limit | Only applies if the trigger uses **Docker**; Dockerfile already uses `mirror.gcr.io` |
+| `toomanyrequests` pulling `python:3.13-slim` | Docker Hub rate limit | Only applies if the trigger uses **Docker**; Dockerfile already uses `mirror.gcr.io` |
+| `bash: line 1: app/main.py: Permission denied` then `exit(126)` | Cloud Build trigger `_ENTRYPOINT` is `app/main.py`, so the container tries to exec the module instead of uvicorn | Keep `app/main.py` executable with a `__main__` uvicorn runner, or set `_ENTRYPOINT` to `uvicorn app.main:app --host 0.0.0.0 --port 8080` |
 
 Health for the platform: `GET /health`. It must not need Datastore.
 

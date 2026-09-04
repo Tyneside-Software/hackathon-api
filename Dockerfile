@@ -1,6 +1,6 @@
 # mirror.gcr.io is Google's Docker Hub cache — Cloud Build often fails
-# with toomanyrequests if it pulls python:3.12-slim from docker.io directly.
-FROM mirror.gcr.io/library/python:3.12-slim
+# with toomanyrequests if it pulls python:3.13-slim from docker.io directly.
+FROM mirror.gcr.io/library/python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
