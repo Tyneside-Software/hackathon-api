@@ -5,27 +5,29 @@ Python **FastAPI** backend for the Tyneside Logistics hackathon. Hosted on **Goo
 **Repo:** https://github.com/Tyneside-Software/hackathon-api  
 **Site:** https://github.com/Tyneside-Software/hackathon-site  
 **Live site:** https://hackathon.tyneside.software  
+**Live API:** https://hackathon-api-git-975511976696.europe-west2.run.app  
 
-To run **site + API** together, clone both as siblings and from the site folder run `.\start.ps1`.
+The picture of **both** repos is the site wiki: [Architecture](https://hackathon.tyneside.software/docs/#architecture).
+
+To run site + API together, clone both as siblings and from the **site** folder run `.\start.ps1`.
 
 ## Documentation
 
 | Doc | Contents |
 |-----|----------|
-| [docs/STACK.md](docs/STACK.md) | FastAPI, Uvicorn, Docker, CORS, routes |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | Local, Cloud Run, env vars, health |
-| Site JS layer | Alpine.js — [hackathon-site/docs/JAVASCRIPT.md](https://github.com/Tyneside-Software/hackathon-site/blob/main/docs/JAVASCRIPT.md) |
+| [docs/STACK.md](docs/STACK.md) | FastAPI, routes, CORS, buildpacks vs Dockerfile |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Local, GitHub trigger, Cloud Build failures |
+| Site wiki | https://hackathon.tyneside.software/docs/ |
 
-## Tech stack (short)
+## Stack (short)
 
-- Python 3.13 on Cloud Run buildpacks (ubuntu2404; 3.12 is not available there), FastAPI, Uvicorn
-- `Dockerfile` (Cloud Build) **and** root `main.py` + `Procfile` (buildpacks from GitHub)
-- Cloud Run
+- FastAPI + Uvicorn; `VERSION` **0.1.3** on `/` and `/health`
+- Cloud Run from GitHub uses **buildpacks** (Python **3.13**, ubuntu2404) — not the Dockerfile
+- Root `main.py` re-exports `app` for pack’s `main:app`
 - CORS via `CORS_ORIGINS`
-- `VERSION` on `/` and `/health` (now `0.1.0`)
-- No database yet
+- `google-cloud-datastore` only for `POST /create_field`
 
-The site is static HTML + **Alpine.js 3** + Leaflet. This API must stay a boring JSON service those pages can `fetch`.
+The site is static HTML + Alpine.js 3 + Leaflet. This API stays a JSON service those pages can `fetch`.
 
 ## Local
 
@@ -36,39 +38,31 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8080
 ```
 
-- Health: http://127.0.0.1:8080/health  
-- Docs: http://127.0.0.1:8080/docs  
-- Root: http://127.0.0.1:8080/
+- http://127.0.0.1:8080/health  
+- http://127.0.0.1:8080/test_field  
+- http://127.0.0.1:8080/docs  
 
 ## Routes
 
 | Method | Path | Returns |
 |--------|------|---------|
-| GET | `/` | service, docs, health, version |
+| GET | `/` | service, docs, health, test_field, version |
 | GET | `/health` | `ok`, service, utc, version |
+| GET | `/test_field` | `ok`, key, value |
+| POST | `/create_field` | Datastore write |
 
-New routes: add them in `app/main.py`, keep `/health` free of extra dependencies, and extend CORS methods if you need more than GET/POST.
+Add new routes in `app/main.py`. Keep `/health` cheap.
 
 ## CORS
 
-Set `CORS_ORIGINS` to a comma-separated list. Production must include:
+If you set `CORS_ORIGINS` on Cloud Run it **replaces** the code defaults. Production must include:
 
 ```
 https://hackathon.tyneside.software,http://127.0.0.1:5500,http://localhost:5500
 ```
 
-The site reads the API base from `hackathon-site/config.js` (`window.HACKATHON_API`).
+The site reads the base URL from `hackathon-site/config.js`.
 
 ## Cloud Run
 
-See [docs/DEPLOY.md](docs/DEPLOY.md). Short form:
-
-```powershell
-gcloud run deploy hackathon-api `
-  --source . `
-  --region europe-west2 `
-  --allow-unauthenticated `
-  --set-env-vars "CORS_ORIGINS=https://hackathon.tyneside.software,http://127.0.0.1:5500,http://localhost:5500"
-```
-
-Paste the service URL into the site `config.js` for Pages.
+See [docs/DEPLOY.md](docs/DEPLOY.md). The GitHub trigger is pack/buildpacks, not Docker.

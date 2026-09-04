@@ -2,8 +2,9 @@
 
 | File | Contents |
 |------|----------|
-| [STACK.md](STACK.md) | FastAPI, Uvicorn, Docker, CORS, current routes |
-| [DEPLOY.md](DEPLOY.md) | Local, Cloud Run, env, health |
+| [STACK.md](STACK.md) | Runtime, files, routes, CORS |
+| [DEPLOY.md](DEPLOY.md) | Local, GitHub buildpacks, Cloud Build errors |
 | [../README.md](../README.md) | Quick start |
 
-The front end uses **Alpine.js 3** (static HTML, no bundler). Keep this API a JSON service those pages can `fetch`.
+The combined picture (site + API) lives on the **site wiki**:  
+https://hackathon.tyneside.software/docs/#architecture
