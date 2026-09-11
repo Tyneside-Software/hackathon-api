@@ -13,8 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import VERSION, origins
-from app.dependencies import oauth2_scheme
-from app.routers import devices, fields, health, locations
+from app.routers import auth, devices, fields, health, locations
 
 app = FastAPI(title="Hackathon API", version=VERSION)
 app.add_middleware(
@@ -22,10 +21,11 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept"],
+    allow_headers=["Content-Type", "Accept", "Authorization"],
     max_age=600,
 )
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(fields.router)
 app.include_router(locations.router)
 app.include_router(devices.router)

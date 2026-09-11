@@ -7,6 +7,8 @@ from .config import log
 
 # Last-known positions in this process. Datastore is the durable copy when GCP works.
 last_devices: dict[str, dict] = {}
+# Registered users in this process. Firestore/Datastore is the durable copy when GCP works.
+last_users: dict[str, dict] = {}
 
 
 def utc_now() -> str:
@@ -76,3 +78,68 @@ def pings_from_datastore(device_id: str, take: int) -> list[dict]:
         matched.append(ping_public(dict(entity)))
     matched.sort(key=lambda r: r.get("recorded_at") or "", reverse=True)
     return matched[:take]
+
+
+def _user_row(data: dict, username: str) -> dict:
+    return {
+        "username": username,
+        "email": data.get("email"),
+        "full_name": data.get("full_name"),
+        "disabled": bool(data.get("disabled", False)),
+        "hashed_password": data.get("hashed_password") or "",
+    }
+
+
+def load_user_row(username: str) -> dict | None:
+    key = username.strip()
+    if not key:
+        return None
+    cached = last_users.get(key)
+    if cached:
+        return dict(cached)
+    try:
+        from google.cloud import firestore
+
+        snap = firestore.Client().collection("User").document(key).get()
+        if snap.exists:
+            row = _user_row(snap.to_dict() or {}, key)
+            last_users[key] = row
+            return dict(row)
+    except Exception as exc:
+        log.warning("Firestore User read failed: %s", exc)
+    try:
+        client = datastore_client()
+        entity = client.get(client.key("User", key))
+        if entity is not None:
+            row = _user_row(dict(entity), key)
+            last_users[key] = row
+            return dict(row)
+    except Exception as exc:
+        log.warning("Datastore User read failed: %s", exc)
+    return None
+
+
+def write_user_row(row: dict) -> None:
+    username = str(row.get("username") or "").strip()
+    stored = {
+        "username": username,
+        "email": row.get("email"),
+        "full_name": row.get("full_name"),
+        "disabled": bool(row.get("disabled", False)),
+        "hashed_password": row.get("hashed_password") or "",
+        "updated_at": utc_now(),
+    }
+    last_users[username] = stored
+    try:
+        from google.cloud import firestore
+
+        firestore.Client().collection("User").document(username).set(stored)
+    except Exception as exc:
+        log.warning("Firestore User write failed: %s", exc)
+    try:
+        client = datastore_client()
+        entity = client.entity(key=client.key("User", username))
+        entity.update(stored)
+        client.put(entity)
+    except Exception as exc:
+        log.warning("Datastore User write failed: %s", exc)

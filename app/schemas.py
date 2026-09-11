@@ -4,6 +4,34 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    username: str | None = None
+
+
+class User(BaseModel):
+    username: str
+    email: str | None = None
+    full_name: str | None = None
+    disabled: bool | None = None
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    password: str = Field(min_length=8, max_length=128)
+    email: str | None = None
+    full_name: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 class FieldPayload(BaseModel):
     key: str
     value: str
