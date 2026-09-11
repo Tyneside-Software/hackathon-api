@@ -21,7 +21,7 @@ To run site + API together, clone both as siblings and from the **site** folder 
 
 ## Stack (short)
 
-- FastAPI + Uvicorn; `VERSION` **0.1.3** on `/` and `/health`
+- FastAPI + Uvicorn; `VERSION` **0.1.4** on `/` and `/health`
 - Cloud Run from GitHub uses **buildpacks** (Python **3.13**, ubuntu2404) — not the Dockerfile
 - Root `main.py` re-exports `app` for pack’s `main:app`
 - CORS via `CORS_ORIGINS`
@@ -50,6 +50,9 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/health` | `ok`, service, utc, version |
 | GET | `/test_field` | `ok`, key, value |
 | POST | `/create_field` | Datastore write |
+| POST | `/v1/locations` | GPS ping from the Android tracker |
+| GET | `/v1/devices` | Last-known phones for the map |
+| GET | `/v1/devices/{id}` | One phone |
 
 Add new routes in `app/main.py`. Keep `/health` cheap.
 
