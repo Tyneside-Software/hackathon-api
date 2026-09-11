@@ -54,6 +54,17 @@ def _fresh(row: dict | None) -> bool:
     return age is not None and age < BUS_TTL_S
 
 
+def _seed_trails(row: dict) -> dict:
+    """Old snapshots have vehicles but no trails — start a point per bus without another upstream fetch."""
+    if row.get("trails"):
+        return row
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    row = dict(row)
+    row["trails"] = merge_trails({}, row.get("vehicles") or [], now_unix)
+    write_bus_cache(row.get("region") or BUS_REGION, row)
+    return row
+
+
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -218,12 +229,12 @@ def list_buses() -> dict:
     """Live vehicles inside 30 miles of Newcastle. Cached in Firestore."""
     cached = load_bus_cache(BUS_REGION)
     if _fresh(cached):
-        return _payload(cached, "cache", False)
+        return _payload(_seed_trails(cached), "cache", False)
 
     with _refresh_lock:
         cached = load_bus_cache(BUS_REGION)
         if _fresh(cached):
-            return _payload(cached, "cache", False)
+            return _payload(_seed_trails(cached), "cache", False)
         try:
             vehicles = fetch_upstream()
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
