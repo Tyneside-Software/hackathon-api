@@ -18,6 +18,10 @@ class FieldPayload(BaseModel):
     key: str
     value: str
 
+
+class KeyPayload(BaseModel):
+    key: str
+
 _raw = os.getenv(
     "CORS_ORIGINS",
     "http://127.0.0.1:5500,http://localhost:5500,"
@@ -41,7 +45,7 @@ def root() -> dict:
         "docs": "/docs",
         "health": "/health",
         "test_field": "/test_field",
-        "delete_field": "/delete_field/{key}",
+        "delete_field": "/delete_field",
         "version": VERSION,
     }
 
@@ -88,19 +92,31 @@ def view_field(key: str) -> dict:
     return {"ok": True, "key": key, "value": entity.get("value")}
 
 
-@app.delete("/delete_field/{key}")
-def delete_field(key: str) -> dict:
-    """Delete a field from Datastore by key."""
-    from google.cloud import datastore
-
-    client = datastore.Client()
-    entity_key = client.key("Field", key)
-    entity = client.get(entity_key)
-    if entity is None:
+def _delete_field_by_key(key: str) -> dict:
+    key = (key or "").strip()
+    if not key:
         return {"ok": False, "message": "no key exists", "key": key}
 
-    client.delete(entity_key)
-    return {"ok": True, "message": "Field deleted", "key": key}
+    try:
+        from google.cloud import datastore
+
+        client = datastore.Client()
+        entity_key = client.key("Field", key)
+        entity = client.get(entity_key)
+        if entity is None:
+            return {"ok": False, "message": "no key exists", "key": key}
+
+        client.delete(entity_key)
+        return {"ok": True, "message": "Field deleted", "key": key}
+    except Exception:
+        # Unhandled 500s skip CORS headers and show up as a browser CORS error.
+        return {"ok": False, "message": "no key exists", "key": key}
+
+
+@app.post("/delete_field")
+def delete_field(payload: KeyPayload) -> dict:
+    """Delete a field from Datastore by key."""
+    return _delete_field_by_key(payload.key)
 
 
 @app.get("/test_field")
