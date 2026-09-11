@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 log = logging.getLogger("hackathon-api")
 
 app = FastAPI(title="Hackathon API", version=VERSION)
@@ -134,6 +134,52 @@ def _datastore_client():
     return datastore.Client()
 
 
+def _as_iso(value) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _ping_public(row: dict) -> dict:
+    return {
+        "device_id": row.get("device_id"),
+        "lat": row.get("lat"),
+        "lng": row.get("lng"),
+        "accuracy_m": row.get("accuracy_m"),
+        "heading": row.get("heading"),
+        "speed_mps": row.get("speed_mps"),
+        "recorded_at": _as_iso(row.get("recorded_at")),
+        "received_at": _as_iso(row.get("received_at")),
+    }
+
+
+def _pings_from_firestore(device_id: str, take: int) -> list[dict]:
+    from google.cloud import firestore
+
+    db = firestore.Client()
+    matched = []
+    for snap in db.collection("LocationPing").stream():
+        data = snap.to_dict() or {}
+        if str(data.get("device_id") or "").strip() != device_id:
+            continue
+        matched.append(_ping_public(data))
+    matched.sort(key=lambda r: r.get("recorded_at") or "", reverse=True)
+    return matched[:take]
+
+
+def _pings_from_datastore(device_id: str, take: int) -> list[dict]:
+    client = _datastore_client()
+    matched = []
+    for entity in client.query(kind="LocationPing").fetch(limit=2000):
+        if str(entity.get("device_id") or "").strip() != device_id:
+            continue
+        matched.append(_ping_public(dict(entity)))
+    matched.sort(key=lambda r: r.get("recorded_at") or "", reverse=True)
+    return matched[:take]
+
+
 @app.post("/v1/locations")
 def create_location(payload: LocationPayload) -> dict:
     """Phone GPS ping. Upserts last-known Device; appends LocationPing history."""
@@ -214,45 +260,32 @@ def get_device(device_id: str) -> dict:
 
 
 @app.get("/v1/locations")
-def list_locations(device_id: str, limit: int = 20) -> dict:
-    take = max(1, min(limit, 100))
+def list_locations(device_id: str, limit: int = 100) -> dict:
+    """Historic GPS pings for one phone, from Firestore LocationPing (Datastore fallback)."""
+    take = max(1, min(limit, 500))
+    wanted = device_id.strip()
+    rows: list[dict] = []
+    source = "none"
     try:
-        client = _datastore_client()
-        query = client.query(kind="LocationPing")
-        query.add_filter("device_id", "=", device_id)
-        fetched = list(query.fetch(limit=200))
-        fetched.sort(key=lambda e: e.get("recorded_at") or "", reverse=True)
-        rows = []
-        for entity in fetched[:take]:
-            rows.append(
-                {
-                    "lat": entity.get("lat"),
-                    "lng": entity.get("lng"),
-                    "accuracy_m": entity.get("accuracy_m"),
-                    "recorded_at": entity.get("recorded_at"),
-                    "received_at": entity.get("received_at"),
-                }
-            )
-        return {"ok": True, "device_id": device_id, "count": len(rows), "pings": rows}
+        rows = _pings_from_firestore(wanted, take)
+        if rows:
+            source = "firestore"
     except Exception as exc:
-        log.warning("Datastore ping history failed: %s", exc)
-        cached = _last_devices.get(device_id)
-        if not cached:
-            return {"ok": True, "device_id": device_id, "count": 0, "pings": []}
-        return {
-            "ok": True,
-            "device_id": device_id,
-            "count": 1,
-            "pings": [
-                {
-                    "lat": cached.get("last_lat"),
-                    "lng": cached.get("last_lng"),
-                    "accuracy_m": cached.get("accuracy_m"),
-                    "recorded_at": cached.get("last_seen_at"),
-                    "received_at": cached.get("updated_at"),
-                }
-            ],
-        }
+        log.warning("Firestore LocationPing read failed: %s", exc)
+    if not rows:
+        try:
+            rows = _pings_from_datastore(wanted, take)
+            if rows:
+                source = "datastore"
+        except Exception as exc:
+            log.warning("Datastore LocationPing read failed: %s", exc)
+    return {
+        "ok": True,
+        "device_id": wanted,
+        "count": len(rows),
+        "source": source,
+        "pings": rows,
+    }
 
 
 if __name__ == "__main__":
