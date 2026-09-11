@@ -21,6 +21,8 @@ class FieldPayload(BaseModel):
     value: str
 
 
+class KeyPayload(BaseModel):
+    key: str
 class LocationPayload(BaseModel):
     device_id: str = Field(min_length=1, max_length=128)
     lat: float = Field(ge=-90, le=90)
@@ -57,6 +59,7 @@ def root() -> dict:
         "docs": "/docs",
         "health": "/health",
         "test_field": "/test_field",
+        "delete_field": "/delete_field",
         "locations": "/v1/locations",
         "devices": "/v1/devices",
         "version": VERSION,
@@ -109,6 +112,150 @@ def view_field(key: str) -> dict:
 @app.get("/test_field")
 def test_field() -> dict:
     return {"ok": True, "key": "example_key", "value": "example_value"}
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _device_public(row: dict) -> dict:
+    return {
+        "device_id": row.get("device_id"),
+        "last_lat": row.get("last_lat"),
+        "last_lng": row.get("last_lng"),
+        "last_seen_at": row.get("last_seen_at"),
+        "accuracy_m": row.get("accuracy_m"),
+        "heading": row.get("heading"),
+        "speed_mps": row.get("speed_mps"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _datastore_client():
+    from google.cloud import datastore
+
+    return datastore.Client()
+
+
+@app.post("/v1/locations")
+def create_location(payload: LocationPayload) -> dict:
+    """Phone GPS ping. Upserts last-known Device; appends LocationPing history."""
+    now = _utc_now()
+    recorded = payload.recorded_at or now
+    device_id = payload.device_id.strip()
+    row = {
+        "device_id": device_id,
+        "last_lat": payload.lat,
+        "last_lng": payload.lng,
+        "last_seen_at": recorded,
+        "accuracy_m": payload.accuracy_m,
+        "heading": payload.heading,
+        "speed_mps": payload.speed_mps,
+        "updated_at": now,
+    }
+    _last_devices[device_id] = row
+    stored = "memory"
+    try:
+        from google.cloud import datastore
+
+        client = _datastore_client()
+        ping = datastore.Entity(key=client.key("LocationPing"))
+        ping.update(
+            {
+                "device_id": device_id,
+                "lat": payload.lat,
+                "lng": payload.lng,
+                "accuracy_m": payload.accuracy_m,
+                "recorded_at": recorded,
+                "received_at": now,
+                "heading": payload.heading,
+                "speed_mps": payload.speed_mps,
+            }
+        )
+        client.put(ping)
+        device = datastore.Entity(key=client.key("Device", device_id))
+        device.update(row)
+        client.put(device)
+        stored = "datastore"
+    except Exception as exc:
+        log.warning("Datastore write failed, keeping in-memory last known: %s", exc)
+    return {"ok": True, "stored": stored, **_device_public(row)}
+
+
+@app.get("/v1/devices")
+def list_devices() -> dict:
+    """Last known position for every phone that has pinged."""
+    devices = {k: dict(v) for k, v in _last_devices.items()}
+    try:
+        client = _datastore_client()
+        for entity in client.query(kind="Device").fetch(limit=200):
+            device_id = entity.key.name or entity.get("device_id")
+            if not device_id:
+                continue
+            devices[device_id] = _device_public({**dict(entity), "device_id": device_id})
+    except Exception as exc:
+        log.warning("Datastore list failed, using in-memory devices: %s", exc)
+    rows = [_device_public(d) for d in devices.values()]
+    rows.sort(key=lambda d: d.get("last_seen_at") or "", reverse=True)
+    return {"ok": True, "count": len(rows), "devices": rows}
+
+
+@app.get("/v1/devices/{device_id}")
+def get_device(device_id: str) -> dict:
+    cached = _last_devices.get(device_id)
+    if cached:
+        return {"ok": True, **_device_public(cached)}
+    try:
+        client = _datastore_client()
+        entity = client.get(client.key("Device", device_id))
+    except Exception as exc:
+        log.warning("Datastore read failed: %s", exc)
+        return {"ok": False, "message": "Device not found", "device_id": device_id}
+    if entity is None:
+        return {"ok": False, "message": "Device not found", "device_id": device_id}
+    return {"ok": True, **_device_public({**dict(entity), "device_id": device_id})}
+
+
+@app.get("/v1/locations")
+def list_locations(device_id: str, limit: int = 20) -> dict:
+    take = max(1, min(limit, 100))
+    try:
+        client = _datastore_client()
+        query = client.query(kind="LocationPing")
+        query.add_filter("device_id", "=", device_id)
+        fetched = list(query.fetch(limit=200))
+        fetched.sort(key=lambda e: e.get("recorded_at") or "", reverse=True)
+        rows = []
+        for entity in fetched[:take]:
+            rows.append(
+                {
+                    "lat": entity.get("lat"),
+                    "lng": entity.get("lng"),
+                    "accuracy_m": entity.get("accuracy_m"),
+                    "recorded_at": entity.get("recorded_at"),
+                    "received_at": entity.get("received_at"),
+                }
+            )
+        return {"ok": True, "device_id": device_id, "count": len(rows), "pings": rows}
+    except Exception as exc:
+        log.warning("Datastore ping history failed: %s", exc)
+        cached = _last_devices.get(device_id)
+        if not cached:
+            return {"ok": True, "device_id": device_id, "count": 0, "pings": []}
+        return {
+            "ok": True,
+            "device_id": device_id,
+            "count": 1,
+            "pings": [
+                {
+                    "lat": cached.get("last_lat"),
+                    "lng": cached.get("last_lng"),
+                    "accuracy_m": cached.get("accuracy_m"),
+                    "recorded_at": cached.get("last_seen_at"),
+                    "received_at": cached.get("updated_at"),
+                }
+            ],
+        }
 
 
 def _utc_now() -> str:
