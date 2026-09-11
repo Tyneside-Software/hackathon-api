@@ -22,11 +22,11 @@ To run site + API together, clone both as siblings and from the **site** folder 
 
 ## Stack (short)
 
-- FastAPI + Uvicorn; `VERSION` **0.1.4** on `/` and `/health`
+- FastAPI + Uvicorn; `VERSION` **0.1.5** on `/` and `/health`
 - Cloud Run from GitHub uses **buildpacks** (Python **3.13**, ubuntu2404) — not the Dockerfile
 - Root `main.py` re-exports `app` for pack’s `main:app`
 - CORS via `CORS_ORIGINS`
-- `google-cloud-datastore` for fields (`/create_field`, `/view_field/{key}`) and GPS (`/v1/locations`) — imported inside the handler, not at module top
+- `google-cloud-datastore` for fields and GPS writes; `google-cloud-firestore` for location history reads — imported inside the handler, not at module top
 
 The site is static HTML + Alpine.js 3 + Leaflet. This API stays a JSON service those pages can `fetch`.
 
@@ -55,7 +55,7 @@ uvicorn app.main:app --reload --port 8080
 | POST | `/v1/locations` | GPS ping from the Android tracker |
 | GET | `/v1/devices` | Last-known phones for the map |
 | GET | `/v1/devices/{id}` | One phone |
-| GET | `/v1/locations?device_id=` | Recent pings for one phone |
+| GET | `/v1/locations?device_id=` | Ping history (`source`: firestore / datastore / none) |
 
 **Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`.
 

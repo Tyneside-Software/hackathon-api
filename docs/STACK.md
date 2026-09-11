@@ -11,7 +11,8 @@ The **human-facing** picture of both repos is the site wiki: [Architecture](http
 | Language | Python **3.13** on Cloud Run | Buildpacks / ubuntu2404. Laptop may be 3.12 or 3.14. |
 | Framework | FastAPI `>=0.115,<0.117` | `/docs`, CORS middleware |
 | Server | Uvicorn `[standard]` | ASGI; `--reload` locally |
-| Datastore | `google-cloud-datastore` | Fields and GPS pings; imported inside the handler |
+| Datastore | `google-cloud-datastore` | Fields + Device/LocationPing writes; imported inside the handler |
+| Firestore | `google-cloud-firestore` | LocationPing history reads (`GET /v1/locations`) |
 | Host | Cloud Run `europe-west2` | Push `main` → GitHub trigger |
 | Builder | **Buildpacks** (`pack`) | GitHub CD **ignores** the Dockerfile |
 | Auth | None | `--allow-unauthenticated` |
@@ -40,6 +41,7 @@ ASGI object: `app.main:app` (and `main:app` via the root re-export).
 fastapi>=0.115.0,<0.117
 uvicorn[standard]>=0.34.0,<0.36
 google-cloud-datastore
+google-cloud-firestore
 ```
 
 Install in a venv. Do not commit `.venv`.
@@ -56,11 +58,11 @@ Install in a venv. Do not commit `.venv`.
 | POST | `/v1/locations` | Phone GPS ping |
 | GET | `/v1/devices` | Last-known phones |
 | GET | `/v1/devices/{id}` | One phone |
-| GET | `/v1/locations?device_id=` | Ping history |
+| GET | `/v1/locations?device_id=` | Ping history (`source` firestore or datastore) |
 | GET | `/docs` | Swagger |
 | GET | `/openapi.json` | OpenAPI |
 
-`VERSION` is in `app/main.py` (currently **0.1.4**). CORS methods: `GET`, `POST`, `DELETE`, `OPTIONS`.
+`VERSION` is in `app/main.py` (currently **0.1.5**). CORS methods: `GET`, `POST`, `DELETE`, `OPTIONS`.
 
 Emulator tracker posted a live ping on 11 September 2026 (`stored=datastore`).
 
