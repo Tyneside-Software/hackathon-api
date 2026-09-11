@@ -29,7 +29,7 @@ That is why the repo has:
 - `Procfile` + `project.toml` entrypoint
 - `.python-version` = **3.13** (a `3.12` pin fails the build)
 
-After a green build, `GET /health` should report `"version": "0.1.3"` or later, and `GET /test_field` should be 200.
+After a green build, `GET /health` should report `"version": "0.1.4"` or later, and `GET /test_field` should be 200.
 
 ## Manual deploy (if the trigger is not enough)
 
