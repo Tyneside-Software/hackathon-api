@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 
 app = FastAPI(title="Hackathon API", version=VERSION)
 
@@ -28,7 +28,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept"],
     max_age=600,
 )
@@ -41,6 +41,7 @@ def root() -> dict:
         "docs": "/docs",
         "health": "/health",
         "test_field": "/test_field",
+        "delete_field": "/delete_field/{key}",
         "version": VERSION,
     }
 
@@ -85,6 +86,22 @@ def view_field(key: str) -> dict:
         return {"ok": False, "message": "Field not found", "key": key}
 
     return {"ok": True, "key": key, "value": entity.get("value")}
+
+
+@app.delete("/delete_field/{key}")
+def delete_field(key: str) -> dict:
+    """Delete a field from Datastore by key."""
+    from google.cloud import datastore
+
+    client = datastore.Client()
+    entity_key = client.key("Field", key)
+    entity = client.get(entity_key)
+    if entity is None:
+        return {"ok": False, "message": "no key exists", "key": key}
+
+    client.delete(entity_key)
+    return {"ok": True, "message": "Field deleted", "key": key}
+
 
 @app.get("/test_field")
 def test_field() -> dict:
