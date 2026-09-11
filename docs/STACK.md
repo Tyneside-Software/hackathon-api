@@ -11,11 +11,11 @@ The **human-facing** picture of both repos is the site wiki: [Architecture](http
 | Language | Python **3.13** on Cloud Run | Buildpacks / ubuntu2404. Laptop may be 3.12 or 3.14. |
 | Framework | FastAPI `>=0.115,<0.117` | `/docs`, CORS middleware |
 | Server | Uvicorn `[standard]` | ASGI; `--reload` locally |
-| Datastore | `google-cloud-datastore` | Fields + Device/LocationPing writes; imported inside the handler |
-| Firestore | `google-cloud-firestore` | LocationPing history reads (`GET /v1/locations`) |
+| Datastore | `google-cloud-datastore` | Fields + Device/LocationPing + User writes; imported inside the handler |
+| Firestore | `google-cloud-firestore` | LocationPing history + User reads |
 | Host | Cloud Run `europe-west2` | Push `main` → GitHub trigger |
 | Builder | **Buildpacks** (`pack`) | GitHub CD **ignores** the Dockerfile |
-| Auth | None | `--allow-unauthenticated` |
+| Auth | JWT on `/users/me` only | Cloud Run still `--allow-unauthenticated`. `POST /register` `/login` `/token`. Set `JWT_SECRET_KEY`. |
 
 Keep `/health` and `/test_field` free of Datastore. Do not add Redis or Postgres unless a board card says so.
 

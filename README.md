@@ -22,11 +22,12 @@ To run site + API together, clone both as siblings and from the **site** folder 
 
 ## Stack (short)
 
-- FastAPI + Uvicorn; `VERSION` **0.1.5** on `/` and `/health`
+- FastAPI + Uvicorn; `VERSION` **0.1.6** on `/` and `/health`
 - Cloud Run from GitHub uses **buildpacks** (Python **3.13**, ubuntu2404) — not the Dockerfile
 - Root `main.py` re-exports `app` for pack’s `main:app`
 - CORS via `CORS_ORIGINS`
-- `google-cloud-datastore` for fields and GPS writes; `google-cloud-firestore` for location history reads — imported inside the handler, not at module top
+- `google-cloud-datastore` for fields, GPS, and User writes; `google-cloud-firestore` for location history and User reads — imported inside the handler, not at module top
+- Accounts: `POST /register`, `POST /login`, `POST /token`, `GET /users/me` (bearer). GPS and map reads stay open. Set `JWT_SECRET_KEY` on Cloud Run.
 
 The site is static HTML + Alpine.js 3 + Leaflet. This API stays a JSON service those pages can `fetch`.
 
@@ -47,9 +48,13 @@ uvicorn app.main:app --reload --port 8080
 
 | Method | Path | Returns |
 |--------|------|---------|
-| GET | `/` | service, docs, health, test_field, version |
+| GET | `/` | service, docs, health, register, login, token, users_me, version |
 | GET | `/health` | `ok`, service, utc, version |
 | GET | `/test_field` | `ok`, key, value |
+| POST | `/register` | Create a user |
+| POST | `/login` | JSON login → bearer token |
+| POST | `/token` | OAuth2 form login (Swagger Authorize) |
+| GET | `/users/me` | Bearer required |
 | POST | `/create_field` | Datastore write |
 | GET | `/view_field/{key}` | Datastore read |
 | POST | `/v1/locations` | GPS ping from the Android tracker |
@@ -57,9 +62,9 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/v1/devices/{id}` | One phone |
 | GET | `/v1/locations?device_id=` | Ping history (`source`: firestore / datastore / none) |
 
-**Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`.
+**Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`. Live `/health` is **0.1.6** with register/login.
 
-Add new routes in `app/main.py`. Keep `/health` cheap.
+Add new routes in `app/routers/`. Keep `/health` cheap.
 
 ## CORS
 
