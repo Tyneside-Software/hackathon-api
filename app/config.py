@@ -5,8 +5,27 @@ import logging
 import os
 import secrets
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 log = logging.getLogger("hackathon-api")
+
+# Live buses: one upstream fetch shared by every map tab. TTL is how long we
+# serve Firestore/memory before asking bustimes.org again. No looking clients
+# means no GET /v1/buses, which means no upstream hit.
+BUS_REGION = "newcastle"
+BUS_TTL_S = 15
+BUS_MILES = 30
+BUS_CENTRE = (54.9783, -1.6178)
+BUS_BBOX = {
+    "ymin": 54.5446,
+    "ymax": 55.4120,
+    "xmin": -2.3740,
+    "xmax": -0.8616,
+}
+BUS_UPSTREAM = (
+    "https://bustimes.org/vehicles.json"
+    f"?ymin={BUS_BBOX['ymin']}&ymax={BUS_BBOX['ymax']}"
+    f"&xmin={BUS_BBOX['xmin']}&xmax={BUS_BBOX['xmax']}"
+)
 
 _raw = os.getenv(
     "CORS_ORIGINS",

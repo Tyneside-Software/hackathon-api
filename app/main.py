@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import VERSION, origins
-from app.routers import auth, devices, fields, health, locations
+from app.routers import auth, buses, devices, fields, health, locations
 
 app = FastAPI(title="Hackathon API", version=VERSION)
 app.add_middleware(
@@ -29,6 +29,7 @@ app.include_router(auth.router)
 app.include_router(fields.router)
 app.include_router(locations.router)
 app.include_router(devices.router)
+app.include_router(buses.router)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ The **human-facing** picture of both repos is the site wiki: [Architecture](http
 | Framework | FastAPI `>=0.115,<0.117` | `/docs`, CORS middleware |
 | Server | Uvicorn `[standard]` | ASGI; `--reload` locally |
 | Datastore | `google-cloud-datastore` | Fields + Device/LocationPing + User writes; imported inside the handler |
-| Firestore | `google-cloud-firestore` | LocationPing history + User reads |
+| Firestore | `google-cloud-firestore` | LocationPing history, User, BusCache |
 | Host | Cloud Run `europe-west2` | Push `main` → GitHub trigger |
 | Builder | **Buildpacks** (`pack`) | GitHub CD **ignores** the Dockerfile |
 | Auth | JWT on `/users/me` only | Cloud Run still `--allow-unauthenticated`. `POST /register` `/login` `/token`. Set `JWT_SECRET_KEY`. |
