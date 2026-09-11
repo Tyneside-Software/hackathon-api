@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 log = logging.getLogger("hackathon-api")
 
 # Live buses: one upstream fetch shared by every map tab. TTL is how long we
@@ -13,6 +13,7 @@ log = logging.getLogger("hackathon-api")
 # means no GET /v1/buses, which means no upstream hit.
 BUS_REGION = "newcastle"
 BUS_TTL_S = 15
+BUS_TRAIL_S = 10 * 60
 BUS_MILES = 30
 BUS_CENTRE = (54.9783, -1.6178)
 BUS_BBOX = {

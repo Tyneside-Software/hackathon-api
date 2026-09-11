@@ -22,13 +22,13 @@ To run site + API together, clone both as siblings and from the **site** folder 
 
 ## Stack (short)
 
-- FastAPI + Uvicorn; `VERSION` **0.1.7** on `/` and `/health`
+- FastAPI + Uvicorn; `VERSION` **0.1.8** on `/` and `/health`
 - Cloud Run from GitHub uses **buildpacks** (Python **3.13**, ubuntu2404) — not the Dockerfile
 - Root `main.py` re-exports `app` for pack’s `main:app`
 - CORS via `CORS_ORIGINS`
 - `google-cloud-datastore` for fields, GPS, and User writes; `google-cloud-firestore` for location history and User reads — imported inside the handler, not at module top
 - Accounts: `POST /register`, `POST /login`, `POST /token`, `GET /users/me` (bearer). GPS and map reads stay open. Set `JWT_SECRET_KEY` on Cloud Run.
-- Buses: `GET /v1/buses` serves Firestore `BusCache/newcastle` (TTL 15s). Fetches bustimes.org only when a looking map tab finds the snapshot stale.
+- Buses: `GET /v1/buses` serves Firestore `BusCache/newcastle` (TTL 15s) plus a 10-minute trail per vehicle. Fetches bustimes.org only when a looking map tab finds the snapshot stale.
 
 The site is static HTML + Alpine.js 3 + Leaflet. This API stays a JSON service those pages can `fetch`.
 
@@ -62,9 +62,9 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/v1/devices` | Last-known phones for the map |
 | GET | `/v1/devices/{id}` | One phone |
 | GET | `/v1/locations?device_id=` | Ping history (`source`: firestore / datastore / none) |
-| GET | `/v1/buses` | Live buses from Firestore cache; bustimes.org only on a stale looking GET |
+| GET | `/v1/buses` | Live buses + 10 min `trails`; bustimes.org only on a stale looking GET |
 
-**Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`. Live `/health` is **0.1.7** with `/v1/buses`.
+**Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`. Live `/health` is **0.1.8** with `/v1/buses` trails.
 
 Add new routes in `app/routers/`. Keep `/health` cheap.
 

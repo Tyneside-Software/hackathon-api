@@ -22,6 +22,7 @@ from ..config import (
     BUS_CENTRE,
     BUS_MILES,
     BUS_REGION,
+    BUS_TRAIL_S,
     BUS_TTL_S,
     BUS_UPSTREAM,
     VERSION,
@@ -97,6 +98,83 @@ def _slim(v: dict) -> dict | None:
     }
 
 
+def _unix(value) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        n = int(value)
+        if n > 10_000_000_000:
+            n //= 1000
+        return n
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def merge_trails(old: dict | None, vehicles: list[dict], now_unix: int) -> dict:
+    """Keep up to BUS_TRAIL_S of [lng, lat, unix] per vehicle id."""
+    cutoff = now_unix - BUS_TRAIL_S
+    min_km = 0.012
+    out: dict[str, list] = {}
+    seen: set[str] = set()
+    prev = old or {}
+    for v in vehicles:
+        vid = v.get("id")
+        if vid is None:
+            continue
+        key = str(vid)
+        seen.add(key)
+        coords = v.get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        try:
+            lng, lat = float(coords[0]), float(coords[1])
+        except (TypeError, ValueError):
+            continue
+        t = _unix(v.get("datetime")) or now_unix
+        pts = []
+        for p in prev.get(key) or []:
+            if not isinstance(p, (list, tuple)) or len(p) < 3:
+                continue
+            try:
+                pu = int(p[2])
+                plng, plat = float(p[0]), float(p[1])
+            except (TypeError, ValueError):
+                continue
+            if pu >= cutoff:
+                pts.append([plng, plat, pu])
+        moved = True
+        if pts:
+            last = pts[-1]
+            moved = _haversine_km(last[1], last[0], lat, lng) >= min_km or (t - last[2]) >= 12
+        if moved:
+            pts.append([lng, lat, t])
+        if len(pts) > 50:
+            pts = pts[-50:]
+        if pts:
+            out[key] = pts
+    for key, raw in prev.items():
+        if key in seen:
+            continue
+        pts = []
+        for p in raw or []:
+            if not isinstance(p, (list, tuple)) or len(p) < 3:
+                continue
+            try:
+                pu = int(p[2])
+                if pu >= cutoff:
+                    pts.append([float(p[0]), float(p[1]), pu])
+            except (TypeError, ValueError):
+                continue
+        if pts:
+            out[str(key)] = pts
+    return out
+
+
 def fetch_upstream() -> list[dict]:
     req = urllib.request.Request(
         BUS_UPSTREAM,
@@ -123,6 +201,8 @@ def _payload(row: dict, source: str, refreshed: bool, stale: bool = False) -> di
         "region": row.get("region") or BUS_REGION,
         "count": int(row.get("count") or len(vehicles)),
         "vehicles": vehicles,
+        "trails": dict(row.get("trails") or {}),
+        "trail_s": BUS_TRAIL_S,
         "fetched_at": row.get("fetched_at"),
         "age_s": None if age is None else round(age, 1),
         "ttl_s": BUS_TTL_S,
@@ -156,11 +236,14 @@ def list_buses() -> dict:
                 status_code=502,
                 detail="Could not reach bustimes.org and no cache yet.",
             ) from exc
+        now_unix = int(datetime.now(timezone.utc).timestamp())
+        trails = merge_trails((cached or {}).get("trails"), vehicles, now_unix)
         row = {
             "region": BUS_REGION,
             "fetched_at": utc_now(),
             "count": len(vehicles),
             "vehicles": vehicles,
+            "trails": trails,
         }
         stored = write_bus_cache(BUS_REGION, row)
         source = stored if stored in ("firestore", "datastore") else "bustimes"

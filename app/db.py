@@ -149,6 +149,32 @@ def write_user_row(row: dict) -> None:
         log.warning("Datastore User write failed: %s", exc)
 
 
+def _bus_trails(data: dict) -> dict:
+    trails = data.get("trails")
+    if trails is None and data.get("trails_json"):
+        try:
+            trails = json.loads(data["trails_json"])
+        except (TypeError, ValueError):
+            trails = {}
+    if not isinstance(trails, dict):
+        return {}
+    out = {}
+    for key, pts in trails.items():
+        if not isinstance(pts, list):
+            continue
+        clean = []
+        for p in pts:
+            if not isinstance(p, (list, tuple)) or len(p) < 3:
+                continue
+            try:
+                clean.append([float(p[0]), float(p[1]), int(p[2])])
+            except (TypeError, ValueError):
+                continue
+        if clean:
+            out[str(key)] = clean
+    return out
+
+
 def _bus_row(data: dict, region: str) -> dict:
     vehicles = data.get("vehicles")
     if vehicles is None and data.get("vehicles_json"):
@@ -163,6 +189,7 @@ def _bus_row(data: dict, region: str) -> dict:
         "fetched_at": as_iso(data.get("fetched_at")) or data.get("fetched_at"),
         "count": int(data.get("count") or len(vehicles)),
         "vehicles": vehicles,
+        "trails": _bus_trails(data),
     }
 
 
@@ -218,6 +245,7 @@ def write_bus_cache(region: str, row: dict) -> str:
         "fetched_at": row.get("fetched_at") or utc_now(),
         "count": int(row.get("count") or len(row.get("vehicles") or [])),
         "vehicles": list(row.get("vehicles") or []),
+        "trails": dict(row.get("trails") or {}),
     }
     last_buses[key] = stored
     wrote = "memory"
@@ -232,7 +260,7 @@ def write_bus_cache(region: str, row: dict) -> str:
         client = datastore_client()
         entity = client.entity(
             key=client.key("BusCache", key),
-            exclude_from_indexes=("vehicles_json",),
+            exclude_from_indexes=("vehicles_json", "trails_json"),
         )
         entity.update(
             {
@@ -240,6 +268,7 @@ def write_bus_cache(region: str, row: dict) -> str:
                 "fetched_at": stored["fetched_at"],
                 "count": stored["count"],
                 "vehicles_json": json.dumps(stored["vehicles"], separators=(",", ":")),
+                "trails_json": json.dumps(stored["trails"], separators=(",", ":")),
             }
         )
         client.put(entity)
