@@ -4,10 +4,11 @@ Python **FastAPI** backend for the Tyneside Logistics hackathon. Hosted on **Goo
 
 **Repo:** https://github.com/Tyneside-Software/hackathon-api  
 **Site:** https://github.com/Tyneside-Software/hackathon-site  
+**Android:** https://github.com/Tyneside-Software/hackathon-android  
 **Live site:** https://hackathon.tyneside.software  
 **Live API:** https://hackathon-api-git-975511976696.europe-west2.run.app  
 
-The picture of **both** repos is the site wiki: [Architecture](https://hackathon.tyneside.software/docs/#architecture).
+The picture of **all three** repos is the site wiki: [Architecture](https://hackathon.tyneside.software/docs/#architecture).
 
 To run site + API together, clone both as siblings and from the **site** folder run `.\start.ps1`.
 
@@ -25,7 +26,7 @@ To run site + API together, clone both as siblings and from the **site** folder 
 - Cloud Run from GitHub uses **buildpacks** (Python **3.13**, ubuntu2404) — not the Dockerfile
 - Root `main.py` re-exports `app` for pack’s `main:app`
 - CORS via `CORS_ORIGINS`
-- `google-cloud-datastore` only for `POST /create_field`
+- `google-cloud-datastore` for fields (`/create_field`, `/view_field/{key}`) and GPS (`/v1/locations`) — imported inside the handler, not at module top
 
 The site is static HTML + Alpine.js 3 + Leaflet. This API stays a JSON service those pages can `fetch`.
 
@@ -50,9 +51,13 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/health` | `ok`, service, utc, version |
 | GET | `/test_field` | `ok`, key, value |
 | POST | `/create_field` | Datastore write |
+| GET | `/view_field/{key}` | Datastore read |
 | POST | `/v1/locations` | GPS ping from the Android tracker |
 | GET | `/v1/devices` | Last-known phones for the map |
 | GET | `/v1/devices/{id}` | One phone |
+| GET | `/v1/locations?device_id=` | Recent pings for one phone |
+
+**Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`.
 
 Add new routes in `app/main.py`. Keep `/health` cheap.
 

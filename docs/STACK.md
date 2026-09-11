@@ -11,7 +11,7 @@ The **human-facing** picture of both repos is the site wiki: [Architecture](http
 | Language | Python **3.13** on Cloud Run | Buildpacks / ubuntu2404. Laptop may be 3.12 or 3.14. |
 | Framework | FastAPI `>=0.115,<0.117` | `/docs`, CORS middleware |
 | Server | Uvicorn `[standard]` | ASGI; `--reload` locally |
-| Datastore | `google-cloud-datastore` | Only `/create_field`; imported inside the handler |
+| Datastore | `google-cloud-datastore` | Fields and GPS pings; imported inside the handler |
 | Host | Cloud Run `europe-west2` | Push `main` → GitHub trigger |
 | Builder | **Buildpacks** (`pack`) | GitHub CD **ignores** the Dockerfile |
 | Auth | None | `--allow-unauthenticated` |
@@ -52,10 +52,17 @@ Install in a venv. Do not commit `.venv`.
 | GET | `/health` | `ok`, `service`, `utc`, `version` |
 | GET | `/test_field` | `ok`, `key`, `value` |
 | POST | `/create_field` | Datastore entity (needs GCP credentials) |
+| GET | `/view_field/{key}` | Datastore read |
+| POST | `/v1/locations` | Phone GPS ping |
+| GET | `/v1/devices` | Last-known phones |
+| GET | `/v1/devices/{id}` | One phone |
+| GET | `/v1/locations?device_id=` | Ping history |
 | GET | `/docs` | Swagger |
 | GET | `/openapi.json` | OpenAPI |
 
-`VERSION` is in `app/main.py` (currently **0.1.3**). CORS methods: `GET`, `POST`, `OPTIONS`.
+`VERSION` is in `app/main.py` (currently **0.1.4**). CORS methods: `GET`, `POST`, `DELETE`, `OPTIONS`.
+
+Emulator tracker posted a live ping on 11 September 2026 (`stored=datastore`).
 
 ## CORS
 
