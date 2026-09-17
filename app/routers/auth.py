@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
+from ..db import PersistError, UserExistsError
 from ..dependencies import get_current_active_user
 from ..models import User
 from ..schemas import LoginRequest, Token, User as UserPublic, UserCreate
@@ -28,10 +29,17 @@ def login_or_401(username: str, password: str) -> Token:
 
 @router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
 def register(payload: UserCreate) -> UserPublic:
-    username = payload.username.strip()
-    if User.get(username):
+    if User.get(payload.username):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered")
-    return User.create(payload).public()
+    try:
+        return User.create(payload).public()
+    except UserExistsError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered")
+    except PersistError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not store user",
+        )
 
 
 @router.post("/token", response_model=Token)

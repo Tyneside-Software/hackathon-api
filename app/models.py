@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .db import load_user_row, write_user_row
+from .db import load_user_row, normalise_username, write_user_row
 from .schemas import Token, User as UserPublic, UserCreate
 from .security import (
     DUMMY_HASH,
@@ -36,18 +36,18 @@ class User(BaseModel):
     @classmethod
     def create(cls, payload: UserCreate) -> User:
         user = cls(
-            username=payload.username.strip(),
+            username=normalise_username(payload.username),
             email=payload.email,
             full_name=payload.full_name,
             disabled=False,
             hashed_password=get_password_hash(payload.password),
         )
-        user.save()
+        user.save(create_only=True)
         return user
 
     @classmethod
     def authenticate(cls, username: str, password: str) -> User | None:
-        user = cls.get(username.strip())
+        user = cls.get(username)
         if not user:
             verify_password(password, DUMMY_HASH)
             return None
@@ -58,8 +58,8 @@ class User(BaseModel):
     def check_password(self, password: str) -> bool:
         return verify_password(password, self.hashed_password)
 
-    def save(self) -> None:
-        write_user_row(self.model_dump())
+    def save(self, *, create_only: bool = False) -> None:
+        write_user_row(self.model_dump(), create_only=create_only)
 
     def public(self) -> UserPublic:
         return UserPublic(

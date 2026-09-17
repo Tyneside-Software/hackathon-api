@@ -8,8 +8,20 @@ from .config import BUS_TTL_S, log
 
 # Last-known positions in this process. Datastore is the durable copy when GCP works.
 last_devices: dict[str, dict] = {}
-# Registered users in this process. Firestore/Datastore is the durable copy when GCP works.
+# Registered users in this process. Firestore is source of truth; Datastore if Firestore is down.
 last_users: dict[str, dict] = {}
+
+
+class PersistError(Exception):
+    """Neither Firestore nor Datastore accepted the user write."""
+
+
+class UserExistsError(Exception):
+    """Username already has a User document."""
+
+
+def normalise_username(username: str) -> str:
+    return username.strip().lower()
 # Shared live-bus snapshot. Firestore BusCache is the durable copy; this dict
 # stops one Cloud Run instance hitting bustimes.org on every map poll.
 last_buses: dict[str, dict] = {}
@@ -95,12 +107,9 @@ def _user_row(data: dict, username: str) -> dict:
 
 
 def load_user_row(username: str) -> dict | None:
-    key = username.strip()
+    key = normalise_username(username)
     if not key:
         return None
-    cached = last_users.get(key)
-    if cached:
-        return dict(cached)
     try:
         from google.cloud import firestore
 
@@ -109,6 +118,7 @@ def load_user_row(username: str) -> dict | None:
             row = _user_row(snap.to_dict() or {}, key)
             last_users[key] = row
             return dict(row)
+        return None
     except Exception as exc:
         log.warning("Firestore User read failed: %s", exc)
     try:
@@ -118,13 +128,53 @@ def load_user_row(username: str) -> dict | None:
             row = _user_row(dict(entity), key)
             last_users[key] = row
             return dict(row)
+        return None
     except Exception as exc:
         log.warning("Datastore User read failed: %s", exc)
-    return None
+    cached = last_users.get(key)
+    return dict(cached) if cached else None
 
 
-def write_user_row(row: dict) -> None:
-    username = str(row.get("username") or "").strip()
+def _firestore_write_user(stored: dict, *, create_only: bool) -> None:
+    from google.cloud import firestore
+
+    username = stored["username"]
+    db = firestore.Client()
+    doc_ref = db.collection("User").document(username)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def _commit(transaction):
+        snap = doc_ref.get(transaction=transaction)
+        if snap.exists:
+            if create_only:
+                raise UserExistsError("Username already registered")
+            transaction.set(doc_ref, stored)
+            return
+        transaction.create(doc_ref, stored)
+
+    _commit(transaction)
+
+
+def _datastore_write_user(stored: dict, *, create_only: bool) -> None:
+    from google.cloud import datastore
+
+    username = stored["username"]
+    client = datastore_client()
+    with client.transaction():
+        key = client.key("User", username)
+        existing = client.get(key)
+        if existing is not None and create_only:
+            raise UserExistsError("Username already registered")
+        entity = datastore.Entity(key=key)
+        entity.update(stored)
+        client.put(entity)
+
+
+def write_user_row(row: dict, *, create_only: bool = False) -> str:
+    username = normalise_username(str(row.get("username") or ""))
+    if not username:
+        raise PersistError("Could not store user")
     stored = {
         "username": username,
         "email": row.get("email"),
@@ -133,20 +183,23 @@ def write_user_row(row: dict) -> None:
         "hashed_password": row.get("hashed_password") or "",
         "updated_at": utc_now(),
     }
-    last_users[username] = stored
     try:
-        from google.cloud import firestore
-
-        firestore.Client().collection("User").document(username).set(stored)
+        _firestore_write_user(stored, create_only=create_only)
+        last_users[username] = stored
+        return "firestore"
+    except UserExistsError:
+        raise
     except Exception as exc:
         log.warning("Firestore User write failed: %s", exc)
     try:
-        client = datastore_client()
-        entity = client.entity(key=client.key("User", username))
-        entity.update(stored)
-        client.put(entity)
+        _datastore_write_user(stored, create_only=create_only)
+        last_users[username] = stored
+        return "datastore"
+    except UserExistsError:
+        raise
     except Exception as exc:
         log.warning("Datastore User write failed: %s", exc)
+    raise PersistError("Could not store user")
 
 
 def _bus_trails(data: dict) -> dict:

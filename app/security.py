@@ -13,6 +13,7 @@ from .config import ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_SECRET_KEY
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("dummypassword")
+SUB_PREFIX = "username:"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -29,6 +30,9 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         expires_delta if expires_delta is not None else timedelta(minutes=15)
     )
     to_encode.update({"exp": expire})
+    sub = to_encode.get("sub")
+    if isinstance(sub, str) and sub and not sub.startswith(SUB_PREFIX):
+        to_encode["sub"] = SUB_PREFIX + sub
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -40,8 +44,11 @@ def decode_access_token(token: str) -> str | None:
     username = payload.get("sub")
     if not isinstance(username, str) or not username:
         return None
-    return username
+    if username.startswith(SUB_PREFIX):
+        username = username[len(SUB_PREFIX) :]
+    return username or None
 
 
 def access_token_expires() -> timedelta:
     return timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
