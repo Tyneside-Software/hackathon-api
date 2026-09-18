@@ -9,7 +9,7 @@ VERSION = "0.1.9"
 log = logging.getLogger("hackathon-api")
 
 # Live buses: one upstream fetch shared by every map tab. TTL is how long we
-# serve Firestore/memory before asking bustimes.org again. No looking clients
+# serve SQLite before asking bustimes.org again. No looking clients
 # means no GET /v1/buses, which means no upstream hit.
 BUS_REGION = "newcastle"
 BUS_TTL_S = 15
@@ -42,3 +42,7 @@ if not JWT_SECRET_KEY:
     log.warning("JWT_SECRET_KEY unset; tokens are only valid in this process")
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "120"))
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_default_db = os.path.join(_ROOT, "hackathon.db").replace("\\", "/")
+DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{_default_db}"

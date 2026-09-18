@@ -9,13 +9,23 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import VERSION, origins
+from app.database import init_db
 from app.routers import auth, buses, devices, fields, health, locations
 
-app = FastAPI(title="Hackathon API", version=VERSION)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Hackathon API", version=VERSION, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -30,6 +40,7 @@ app.include_router(fields.router)
 app.include_router(locations.router)
 app.include_router(devices.router)
 app.include_router(buses.router)
+init_db()
 
 
 if __name__ == "__main__":

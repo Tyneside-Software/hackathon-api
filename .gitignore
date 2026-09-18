@@ -6,3 +6,8 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+hackathon.db

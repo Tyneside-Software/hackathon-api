@@ -1,34 +1,39 @@
-"""Datastore / Firestore access and in-memory last-known devices."""
+"""SQLite access via SQLAlchemy."""
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 
-from .config import BUS_TTL_S, log
+from sqlalchemy import select
 
-# Last-known positions in this process. Datastore is the durable copy when GCP works.
-last_devices: dict[str, dict] = {}
-# Registered users in this process. Firestore is source of truth; Datastore if Firestore is down.
-last_users: dict[str, dict] = {}
+from .config import log
+from .database import PersistError, SessionLocal, UserExistsError, normalise_username, utc_now
+from .models import BusCache, Device, FieldRecord, LocationPing
+
+__all__ = [
+    "PersistError",
+    "UserExistsError",
+    "as_iso",
+    "device_public",
+    "get_device_row",
+    "get_field",
+    "list_device_rows",
+    "list_pings",
+    "load_bus_cache",
+    "normalise_username",
+    "ping_public",
+    "save_location",
+    "upsert_field",
+    "utc_now",
+    "write_bus_cache",
+]
 
 
-class PersistError(Exception):
-    """Neither Firestore nor Datastore accepted the user write."""
-
-
-class UserExistsError(Exception):
-    """Username already has a User document."""
-
-
-def normalise_username(username: str) -> str:
-    return username.strip().lower()
-# Shared live-bus snapshot. Firestore BusCache is the durable copy; this dict
-# stops one Cloud Run instance hitting bustimes.org on every map poll.
-last_buses: dict[str, dict] = {}
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def as_iso(value) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def device_public(row: dict) -> dict:
@@ -44,20 +49,6 @@ def device_public(row: dict) -> dict:
     }
 
 
-def datastore_client():
-    from google.cloud import datastore
-
-    return datastore.Client()
-
-
-def as_iso(value) -> str | None:
-    if value is None:
-        return None
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value)
-
-
 def ping_public(row: dict) -> dict:
     return {
         "device_id": row.get("device_id"),
@@ -71,135 +62,114 @@ def ping_public(row: dict) -> dict:
     }
 
 
-def pings_from_firestore(device_id: str, take: int) -> list[dict]:
-    from google.cloud import firestore
-
-    db = firestore.Client()
-    matched = []
-    for snap in db.collection("LocationPing").stream():
-        data = snap.to_dict() or {}
-        if str(data.get("device_id") or "").strip() != device_id:
-            continue
-        matched.append(ping_public(data))
-    matched.sort(key=lambda r: r.get("recorded_at") or "", reverse=True)
-    return matched[:take]
-
-
-def pings_from_datastore(device_id: str, take: int) -> list[dict]:
-    client = datastore_client()
-    matched = []
-    for entity in client.query(kind="LocationPing").fetch(limit=2000):
-        if str(entity.get("device_id") or "").strip() != device_id:
-            continue
-        matched.append(ping_public(dict(entity)))
-    matched.sort(key=lambda r: r.get("recorded_at") or "", reverse=True)
-    return matched[:take]
-
-
-def _user_row(data: dict, username: str) -> dict:
+def _device_to_row(dev: Device) -> dict:
     return {
-        "username": username,
-        "email": data.get("email"),
-        "full_name": data.get("full_name"),
-        "disabled": bool(data.get("disabled", False)),
-        "hashed_password": data.get("hashed_password") or "",
+        "device_id": dev.device_id,
+        "last_lat": dev.last_lat,
+        "last_lng": dev.last_lng,
+        "last_seen_at": dev.last_seen_at,
+        "accuracy_m": dev.accuracy_m,
+        "heading": dev.heading,
+        "speed_mps": dev.speed_mps,
+        "updated_at": dev.updated_at,
     }
 
 
-def load_user_row(username: str) -> dict | None:
-    key = normalise_username(username)
-    if not key:
-        return None
-    try:
-        from google.cloud import firestore
-
-        snap = firestore.Client().collection("User").document(key).get()
-        if snap.exists:
-            row = _user_row(snap.to_dict() or {}, key)
-            last_users[key] = row
-            return dict(row)
-        return None
-    except Exception as exc:
-        log.warning("Firestore User read failed: %s", exc)
-    try:
-        client = datastore_client()
-        entity = client.get(client.key("User", key))
-        if entity is not None:
-            row = _user_row(dict(entity), key)
-            last_users[key] = row
-            return dict(row)
-        return None
-    except Exception as exc:
-        log.warning("Datastore User read failed: %s", exc)
-    cached = last_users.get(key)
-    return dict(cached) if cached else None
-
-
-def _firestore_write_user(stored: dict, *, create_only: bool) -> None:
-    from google.cloud import firestore
-
-    username = stored["username"]
-    db = firestore.Client()
-    doc_ref = db.collection("User").document(username)
-    transaction = db.transaction()
-
-    @firestore.transactional
-    def _commit(transaction):
-        snap = doc_ref.get(transaction=transaction)
-        if snap.exists:
-            if create_only:
-                raise UserExistsError("Username already registered")
-            transaction.set(doc_ref, stored)
-            return
-        transaction.create(doc_ref, stored)
-
-    _commit(transaction)
+def save_location(row: dict, ping: dict) -> str:
+    with SessionLocal() as session:
+        try:
+            device_id = row["device_id"]
+            dev = session.get(Device, device_id)
+            if dev is None:
+                dev = Device(device_id=device_id)
+                session.add(dev)
+            dev.last_lat = row["last_lat"]
+            dev.last_lng = row["last_lng"]
+            dev.last_seen_at = row.get("last_seen_at")
+            dev.accuracy_m = row.get("accuracy_m")
+            dev.heading = row.get("heading")
+            dev.speed_mps = row.get("speed_mps")
+            dev.updated_at = row.get("updated_at")
+            session.add(
+                LocationPing(
+                    device_id=device_id,
+                    lat=ping["lat"],
+                    lng=ping["lng"],
+                    accuracy_m=ping.get("accuracy_m"),
+                    heading=ping.get("heading"),
+                    speed_mps=ping.get("speed_mps"),
+                    recorded_at=ping.get("recorded_at"),
+                    received_at=ping.get("received_at"),
+                )
+            )
+            session.commit()
+            return "sqlite"
+        except Exception as exc:
+            session.rollback()
+            log.warning("SQLite location write failed: %s", exc)
+            raise PersistError("Could not store location") from exc
 
 
-def _datastore_write_user(stored: dict, *, create_only: bool) -> None:
-    from google.cloud import datastore
-
-    username = stored["username"]
-    client = datastore_client()
-    with client.transaction():
-        key = client.key("User", username)
-        existing = client.get(key)
-        if existing is not None and create_only:
-            raise UserExistsError("Username already registered")
-        entity = datastore.Entity(key=key)
-        entity.update(stored)
-        client.put(entity)
+def list_device_rows() -> list[dict]:
+    with SessionLocal() as session:
+        rows = list(session.scalars(select(Device)).all())
+    out = [device_public(_device_to_row(d)) for d in rows]
+    out.sort(key=lambda d: d.get("last_seen_at") or "", reverse=True)
+    return out
 
 
-def write_user_row(row: dict, *, create_only: bool = False) -> str:
-    username = normalise_username(str(row.get("username") or ""))
-    if not username:
-        raise PersistError("Could not store user")
-    stored = {
-        "username": username,
-        "email": row.get("email"),
-        "full_name": row.get("full_name"),
-        "disabled": bool(row.get("disabled", False)),
-        "hashed_password": row.get("hashed_password") or "",
-        "updated_at": utc_now(),
-    }
-    try:
-        _firestore_write_user(stored, create_only=create_only)
-        last_users[username] = stored
-        return "firestore"
-    except UserExistsError:
-        raise
-    except Exception as exc:
-        log.warning("Firestore User write failed: %s", exc)
-    try:
-        _datastore_write_user(stored, create_only=create_only)
-        last_users[username] = stored
-        return "datastore"
-    except UserExistsError:
-        raise
-    except Exception as exc:
-        log.warning("Datastore User write failed: %s", exc)
-    raise PersistError("Could not store user")
+def get_device_row(device_id: str) -> dict | None:
+    with SessionLocal() as session:
+        dev = session.get(Device, device_id)
+        if dev is None:
+            return None
+        return device_public(_device_to_row(dev))
+
+
+def list_pings(device_id: str, take: int) -> list[dict]:
+    with SessionLocal() as session:
+        stmt = (
+            select(LocationPing)
+            .where(LocationPing.device_id == device_id)
+            .order_by(LocationPing.recorded_at.desc())
+            .limit(take)
+        )
+        rows = list(session.scalars(stmt).all())
+    return [
+        ping_public(
+            {
+                "device_id": p.device_id,
+                "lat": p.lat,
+                "lng": p.lng,
+                "accuracy_m": p.accuracy_m,
+                "heading": p.heading,
+                "speed_mps": p.speed_mps,
+                "recorded_at": p.recorded_at,
+                "received_at": p.received_at,
+            }
+        )
+        for p in rows
+    ]
+
+
+def upsert_field(key: str, value: str) -> None:
+    with SessionLocal() as session:
+        rec = session.get(FieldRecord, key)
+        if rec is None:
+            rec = FieldRecord(key=key, value=value, updated_at=utc_now())
+            session.add(rec)
+        else:
+            rec.value = value
+            rec.updated_at = utc_now()
+        session.commit()
+
+
+def get_field(key: str) -> str | None:
+    with SessionLocal() as session:
+        rec = session.get(FieldRecord, key)
+        if rec is None:
+            return None
+        return rec.value
 
 
 def _bus_trails(data: dict) -> dict:
@@ -246,49 +216,22 @@ def _bus_row(data: dict, region: str) -> dict:
     }
 
 
-def _bus_age_s(row: dict | None) -> float | None:
-    if not row:
-        return None
-    fetched = row.get("fetched_at")
-    if not fetched:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(fetched).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return max(0.0, (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds())
-
-
 def load_bus_cache(region: str) -> dict | None:
     key = (region or "").strip() or "newcastle"
-    mem = last_buses.get(key)
-    age = _bus_age_s(mem) if mem else None
-    if mem and mem.get("vehicles") is not None and age is not None and age < BUS_TTL_S:
-        return dict(mem)
-    try:
-        from google.cloud import firestore
-
-        snap = firestore.Client().collection("BusCache").document(key).get()
-        if snap.exists:
-            row = _bus_row(snap.to_dict() or {}, key)
-            last_buses[key] = row
-            return dict(row)
-    except Exception as exc:
-        log.warning("Firestore BusCache read failed: %s", exc)
-    try:
-        client = datastore_client()
-        entity = client.get(client.key("BusCache", key))
-        if entity is not None:
-            row = _bus_row(dict(entity), key)
-            last_buses[key] = row
-            return dict(row)
-    except Exception as exc:
-        log.warning("Datastore BusCache read failed: %s", exc)
-    if mem and mem.get("vehicles") is not None:
-        return dict(mem)
-    return None
+    with SessionLocal() as session:
+        rec = session.get(BusCache, key)
+        if rec is None:
+            return None
+        row = _bus_row(
+            {
+                "fetched_at": rec.fetched_at,
+                "count": rec.count,
+                "vehicles_json": rec.vehicles_json,
+                "trails_json": rec.trails_json,
+            },
+            key,
+        )
+    return dict(row)
 
 
 def write_bus_cache(region: str, row: dict) -> str:
@@ -300,33 +243,14 @@ def write_bus_cache(region: str, row: dict) -> str:
         "vehicles": list(row.get("vehicles") or []),
         "trails": dict(row.get("trails") or {}),
     }
-    last_buses[key] = stored
-    wrote = "memory"
-    try:
-        from google.cloud import firestore
-
-        firestore.Client().collection("BusCache").document(key).set(stored)
-        wrote = "firestore"
-    except Exception as exc:
-        log.warning("Firestore BusCache write failed: %s", exc)
-    try:
-        client = datastore_client()
-        entity = client.entity(
-            key=client.key("BusCache", key),
-            exclude_from_indexes=("vehicles_json", "trails_json"),
-        )
-        entity.update(
-            {
-                "region": key,
-                "fetched_at": stored["fetched_at"],
-                "count": stored["count"],
-                "vehicles_json": json.dumps(stored["vehicles"], separators=(",", ":")),
-                "trails_json": json.dumps(stored["trails"], separators=(",", ":")),
-            }
-        )
-        client.put(entity)
-        if wrote == "memory":
-            wrote = "datastore"
-    except Exception as exc:
-        log.warning("Datastore BusCache write failed: %s", exc)
-    return wrote
+    with SessionLocal() as session:
+        rec = session.get(BusCache, key)
+        if rec is None:
+            rec = BusCache(region=key)
+            session.add(rec)
+        rec.fetched_at = stored["fetched_at"]
+        rec.count = stored["count"]
+        rec.vehicles_json = json.dumps(stored["vehicles"], separators=(",", ":"))
+        rec.trails_json = json.dumps(stored["trails"], separators=(",", ":"))
+        session.commit()
+    return "sqlite"

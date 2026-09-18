@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
-from ..db import PersistError, UserExistsError
+from ..database import PersistError, UserExistsError
 from ..dependencies import get_current_active_user
 from ..models import User
 from ..schemas import LoginRequest, Token, User as UserPublic, UserCreate

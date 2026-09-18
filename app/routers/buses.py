@@ -1,8 +1,8 @@
 """Shared live-bus cache.
 
 The map never calls bustimes.org. Every looking tab hits GET /v1/buses.
-If the Firestore snapshot is younger than BUS_TTL_S we serve it. If it is
-stale (or missing) this request fetches bustimes.org once, writes Firestore,
+If the SQLite snapshot is younger than BUS_TTL_S we serve it. If it is
+stale (or missing) this request fetches bustimes.org once, writes SQLite,
 and everyone else rides that snapshot. No looking tabs means no GET, which
 means no upstream hit.
 """
@@ -226,7 +226,7 @@ def _payload(row: dict, source: str, refreshed: bool, stale: bool = False) -> di
 
 @router.get("/v1/buses")
 def list_buses() -> dict:
-    """Live vehicles inside 30 miles of Newcastle. Cached in Firestore."""
+    """Live vehicles inside 30 miles of Newcastle. Cached in SQLite."""
     cached = load_bus_cache(BUS_REGION)
     if _fresh(cached):
         return _payload(_seed_trails(cached), "cache", False)
@@ -257,5 +257,5 @@ def list_buses() -> dict:
             "trails": trails,
         }
         stored = write_bus_cache(BUS_REGION, row)
-        source = stored if stored in ("firestore", "datastore") else "bustimes"
+        source = stored if stored == "sqlite" else "bustimes"
         return _payload(row, source, True)
