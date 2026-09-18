@@ -48,4 +48,9 @@ if __name__ == "__main__":
 
     # Pass the app object (not "app.main:app") so this works when the
     # Cloud Build trigger execs GOOGLE_ENTRYPOINT=app/main.py.
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8080")),
+        workers=1,
+    )

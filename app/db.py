@@ -9,6 +9,10 @@ from .config import log
 from .database import PersistError, SessionLocal, UserExistsError, normalise_username, utc_now
 from .models import BusCache, Device, FieldRecord, LocationPing
 
+# Last decoded bus snapshot in this process. SQLite is only read on a miss
+# or after an upstream refresh.
+_bus_mem: dict[str, dict] = {}
+
 __all__ = [
     "PersistError",
     "UserExistsError",
@@ -218,6 +222,9 @@ def _bus_row(data: dict, region: str) -> dict:
 
 def load_bus_cache(region: str) -> dict | None:
     key = (region or "").strip() or "newcastle"
+    mem = _bus_mem.get(key)
+    if mem is not None:
+        return mem
     with SessionLocal() as session:
         rec = session.get(BusCache, key)
         if rec is None:
@@ -231,7 +238,8 @@ def load_bus_cache(region: str) -> dict | None:
             },
             key,
         )
-    return dict(row)
+    _bus_mem[key] = row
+    return row
 
 
 def write_bus_cache(region: str, row: dict) -> str:
@@ -243,6 +251,7 @@ def write_bus_cache(region: str, row: dict) -> str:
         "vehicles": list(row.get("vehicles") or []),
         "trails": dict(row.get("trails") or {}),
     }
+    _bus_mem[key] = stored
     with SessionLocal() as session:
         rec = session.get(BusCache, key)
         if rec is None:

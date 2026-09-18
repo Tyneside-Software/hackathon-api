@@ -6,4 +6,4 @@ value = "3.13"
 
 [[build.env]]
 name = "GOOGLE_ENTRYPOINT"
-value = "uvicorn app.main:app --host 0.0.0.0 --port 8080"
+value = "uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1"
