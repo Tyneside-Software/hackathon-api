@@ -21,11 +21,9 @@ def search_users(
     current_user: User = Depends(get_current_active_user),
 ):
     needle = (q or "").strip()
-    if len(needle) < 1:
-        return {"users": []}
     friends = FriendLink.usernames_for(current_user.username)
     admins = ShopAdmin.usernames()
-    users = User.search(needle, exclude=current_user.username, limit=8)
+    users = User.search(needle, exclude=current_user.username, limit=24 if not needle else 8)
     return {
         "users": [u.card(friend=u.username in friends, admin=u.username in admins) for u in users]
     }

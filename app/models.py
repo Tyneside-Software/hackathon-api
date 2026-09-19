@@ -73,10 +73,38 @@ class User(Base):
     updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     @classmethod
+    def _from_data(cls, data: dict) -> User:
+        return cls(
+            username=data.get("username") or "",
+            email=data.get("email"),
+            full_name=data.get("full_name"),
+            disabled=bool(data.get("disabled") or False),
+            hashed_password=data.get("hashed_password") or "",
+            photo=data.get("photo"),
+            updated_at=data.get("updated_at"),
+        )
+
+    def _as_data(self) -> dict:
+        return {
+            "username": self.username,
+            "email": self.email,
+            "full_name": self.full_name,
+            "disabled": bool(self.disabled),
+            "hashed_password": self.hashed_password,
+            "photo": self.photo,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
     def get(cls, username: str) -> User | None:
         key = normalise_username(username)
         if not key:
             return None
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            data = cloud_accounts.user_doc(key)
+            return cls._from_data(data) if data else None
         with SessionLocal() as session:
             return session.get(cls, key)
 
@@ -101,6 +129,11 @@ class User(Base):
             return None
         from sqlalchemy import select
 
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            data = cloud_accounts.user_by_email(key)
+            return cls._from_data(data) if data else None
         with SessionLocal() as session:
             return session.scalars(select(cls).where(cls.email == key)).first()
 
@@ -116,21 +149,21 @@ class User(Base):
     @classmethod
     def search(cls, needle: str, *, exclude: str | None = None, limit: int = 8) -> list[User]:
         needle = (needle or "").strip().lower()
-        if not needle:
-            return []
-        safe = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        like = f"%{safe}%"
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            rows = cloud_accounts.search_users(needle, exclude=exclude, limit=max(limit, 24) if not needle else limit)
+            return [cls._from_data(r) for r in rows]
+        safe = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") if needle else ""
         with SessionLocal() as session:
-            stmt = (
-                select(cls)
-                .where(cls.username.like(like, escape="\\"))
-                .where(cls.disabled.is_(False))
-            )
+            stmt = select(cls).where(cls.disabled.is_(False))
+            if needle:
+                stmt = stmt.where(cls.username.like(f"%{safe}%", escape="\\"))
             if exclude:
                 stmt = stmt.where(cls.username != normalise_username(exclude))
-            rows = list(session.scalars(stmt.limit(24)).all())
-        rows.sort(key=lambda u: (not u.username.startswith(needle), u.username))
-        return rows[:limit]
+            rows = list(session.scalars(stmt.limit(48)).all())
+        rows.sort(key=lambda u: (bool(needle) and not u.username.startswith(needle), u.username))
+        return rows[: max(limit, 24) if not needle else limit]
 
     @classmethod
     def authenticate(cls, username: str, password: str) -> User | None:
@@ -189,6 +222,8 @@ class User(Base):
             return self
         if User.get(new_username):
             raise UserExistsError("Username already registered")
+        from . import cloud_accounts
+
         old_name = self.username
         clone = User(
             username=new_username,
@@ -199,6 +234,20 @@ class User(Base):
             photo=self.photo,
             updated_at=utc_now(),
         )
+        if cloud_accounts.enabled():
+            try:
+                cloud_accounts.put_user(clone._as_data())
+                cloud_accounts.delete_user(old_name)
+                cloud_accounts.retarget_friends(old_name, new_username)
+                cloud_accounts.retarget_admin(old_name, new_username)
+            except UserExistsError:
+                raise
+            except Exception as exc:
+                raise PersistError("Could not store user") from exc
+            found = User.get(new_username)
+            if found is None:
+                raise PersistError("Could not store user")
+            return found
         with SessionLocal() as session:
             try:
                 session.add(clone)
@@ -230,6 +279,11 @@ class User(Base):
     def save(self, *, create_only: bool = False) -> None:
         self.username = normalise_username(self.username)
         self.updated_at = utc_now()
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            cloud_accounts.put_user(self._as_data(), create_only=create_only)
+            return
         with SessionLocal() as session:
             try:
                 if create_only:
@@ -282,6 +336,11 @@ class FriendLink(Base):
         other = User.get(friend)
         if other is None or other.disabled:
             raise PersistError("Could not store user")
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            cloud_accounts.add_friend(username, friend)
+            return
         link = cls(user=username, friend=friend, created_at=utc_now())
         with SessionLocal() as session:
             try:
@@ -295,6 +354,11 @@ class FriendLink(Base):
     def remove(cls, username: str, friend: str) -> None:
         username = normalise_username(username)
         friend = normalise_username(friend)
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            cloud_accounts.remove_friend(username, friend)
+            return
         with SessionLocal() as session:
             row = session.scalars(
                 select(cls).where(cls.user == username, cls.friend == friend)
@@ -307,6 +371,10 @@ class FriendLink(Base):
     @classmethod
     def usernames_for(cls, username: str) -> set[str]:
         username = normalise_username(username)
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            return cloud_accounts.friends_of(username)
         with SessionLocal() as session:
             return set(session.scalars(select(cls.friend).where(cls.user == username)).all())
 
@@ -315,10 +383,12 @@ class FriendLink(Base):
         names = list(cls.usernames_for(username))
         if not names:
             return []
-        with SessionLocal() as session:
-            found = list(session.scalars(select(User).where(User.username.in_(names))).all())
-        by = {u.username: u for u in found}
-        return [by[n] for n in sorted(names) if n in by]
+        found = []
+        for name in sorted(names):
+            user = User.get(name)
+            if user is not None:
+                found.append(user)
+        return found
 
 
 class ShopAdmin(Base):
@@ -333,11 +403,19 @@ class ShopAdmin(Base):
         key = normalise_username(username)
         if not key:
             return False
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            return cloud_accounts.admin_has(key)
         with SessionLocal() as session:
             return session.get(cls, key) is not None
 
     @classmethod
     def usernames(cls) -> set[str]:
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            return cloud_accounts.admin_usernames()
         with SessionLocal() as session:
             return set(session.scalars(select(cls.username)).all())
 
@@ -352,6 +430,11 @@ class ShopAdmin(Base):
     def ensure(cls, username: str, *, founder: bool = False) -> None:
         key = normalise_username(username)
         if not key:
+            return
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            cloud_accounts.admin_ensure(key, founder=founder)
             return
         with SessionLocal() as session:
             row = session.get(cls, key)
@@ -373,6 +456,13 @@ class ShopAdmin(Base):
     @classmethod
     def remove(cls, username: str) -> None:
         key = normalise_username(username)
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            reason = cloud_accounts.admin_remove(key)
+            if reason:
+                raise PersistError(reason)
+            return
         with SessionLocal() as session:
             row = session.get(cls, key)
             if row is None:
@@ -386,6 +476,26 @@ class ShopAdmin(Base):
 
     @classmethod
     def people(cls) -> list[dict]:
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            rows = cloud_accounts.admin_people()
+            out = []
+            for row in rows:
+                user = User.get(row["username"])
+                if user:
+                    card = user.card(admin=True)
+                else:
+                    card = {
+                        "username": row["username"],
+                        "full_name": None,
+                        "photo": None,
+                        "friend": False,
+                        "admin": True,
+                    }
+                card["founder"] = bool(row.get("founder"))
+                out.append(card)
+            return out
         with SessionLocal() as session:
             rows = list(session.scalars(select(cls).order_by(cls.username)).all())
             names = [r.username for r in rows]

@@ -136,10 +136,8 @@ def search_admins(request: Request, q: str = Query(default="")):
     if err:
         return err
     needle = (q or "").strip()
-    if len(needle) < 1:
-        return {"users": []}
     admins = ShopAdmin.usernames()
-    found = User.search(needle, exclude=user.username, limit=8)
+    found = User.search(needle, exclude=user.username, limit=24 if not needle else 8)
     return {"users": [u.card(admin=u.username in admins) for u in found]}
 
 
