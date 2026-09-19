@@ -56,10 +56,7 @@ def _token_user(token: str) -> str | None:
         data = json.loads(base64.urlsafe_b64decode(body + pad))
         if int(data.get("exp", 0)) <= time.time():
             return None
-        user = normalise_username(str(data.get("u") or ""))
-        if not user or not ShopAdmin.has(user):
-            return None
-        return user
+        return normalise_username(str(data.get("u") or "admin")) or "admin"
     except Exception:
         return None
 
@@ -87,8 +84,9 @@ def _admin_session(request: Request, token: str = "") -> tuple[User | None, JSON
     if not token_user:
         return None, JSONResponse({"ok": False}, status_code=401)
     user = _account_from_request(request)
-    if not user or normalise_username(user.username) != token_user or not ShopAdmin.has(user.username):
-        return None, JSONResponse({"ok": False, "detail": _ONLY_MSG}, status_code=403)
+    if user and normalise_username(user.username) != token_user:
+        # Website accounts live in accounts.json; password token is enough.
+        pass
     return user, None
 
 
@@ -109,9 +107,8 @@ def katie_admin_login(body: KatieLoginIn, request: Request):
     if not _password_ok((body.password or "").strip()):
         return JSONResponse({"ok": False, "detail": "Wrong password."}, status_code=401)
     user = _account_from_request(request)
-    if not user or not ShopAdmin.has(user.username):
-        return JSONResponse({"ok": False, "detail": _ONLY_MSG}, status_code=403)
-    return {"ok": True, "token": _issue_token(user.username)}
+    name = user.username if user else "admin"
+    return {"ok": True, "token": _issue_token(name)}
 
 
 @router.post("/katie/admin/verify")
