@@ -511,3 +511,46 @@ class ShopAdmin(Base):
             card["founder"] = name in founders
             out.append(card)
         return out
+
+
+class ShopProfile(Base):
+    __tablename__ = "katie_profiles"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    photo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    @classmethod
+    def upsert(cls, username: str, photo: str | None, full_name: str | None = None) -> None:
+        from . import cloud_accounts
+
+        key = normalise_username(username)
+        if not key:
+            return
+        if cloud_accounts.enabled():
+            cloud_accounts.put_profile(key, photo, full_name)
+            return
+        with SessionLocal() as session:
+            row = session.get(cls, key)
+            if row is None:
+                row = cls(username=key)
+                session.add(row)
+            row.photo = photo or ""
+            if full_name is not None:
+                row.full_name = full_name or None
+            row.updated_at = utc_now()
+            session.commit()
+
+    @classmethod
+    def list_public(cls) -> list[dict]:
+        from . import cloud_accounts
+
+        if cloud_accounts.enabled():
+            return cloud_accounts.list_profiles()
+        with SessionLocal() as session:
+            rows = list(session.scalars(select(cls).order_by(cls.username)).all())
+        return [
+            {"username": r.username, "photo": r.photo or "", "full_name": r.full_name}
+            for r in rows
+        ]

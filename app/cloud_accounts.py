@@ -10,6 +10,7 @@ from .database import utc_now
 _USERS = "katie_users"
 _FRIENDS = "katie_friends"
 _ADMINS = "katie_admins"
+_PROFILES = "katie_profiles"
 
 _client = None
 _tried = False
@@ -266,3 +267,36 @@ def retarget_admin(old: str, new: str) -> None:
         }
     )
     ref.delete()
+
+
+def put_profile(username: str, photo: str | None, full_name: str | None = None) -> None:
+    db = _db()
+    if db is None:
+        return
+    db.collection(_PROFILES).document(username).set(
+        {
+            "username": username,
+            "photo": photo or "",
+            "full_name": full_name or "",
+            "updated_at": utc_now(),
+        }
+    )
+
+
+def list_profiles() -> list[dict]:
+    db = _db()
+    if db is None:
+        return []
+    out = []
+    for snap in db.collection(_PROFILES).stream():
+        data = snap.to_dict() or {}
+        name = data.get("username") or snap.id
+        out.append(
+            {
+                "username": name,
+                "photo": data.get("photo") or "",
+                "full_name": data.get("full_name") or None,
+            }
+        )
+    out.sort(key=lambda r: r["username"])
+    return out
