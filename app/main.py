@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import VERSION, origins
 from app.database import init_db
-from app.routers import auth, buses, devices, fields, health, katie_account, katie_admin, locations
+from app.routers import auth, buses, devices, fields, health, katie_account, katie_admin, katie_friends, locations
 
 
 @asynccontextmanager
@@ -42,6 +42,7 @@ app.include_router(devices.router)
 app.include_router(buses.router)
 app.include_router(katie_admin.router)
 app.include_router(katie_account.router)
+app.include_router(katie_friends.router)
 init_db()
 
 

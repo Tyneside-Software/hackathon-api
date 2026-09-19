@@ -1,7 +1,7 @@
 """SQLAlchemy tables and the User helper used by auth."""
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, Integer, String, Text
+from sqlalchemy import Boolean, Float, Integer, String, Text, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -104,6 +104,33 @@ class User(Base):
         with SessionLocal() as session:
             return session.scalars(select(cls).where(cls.email == key)).first()
 
+    def card(self, *, friend: bool = False) -> dict:
+        return {
+            "username": self.username,
+            "full_name": self.full_name,
+            "photo": self.photo,
+            "friend": friend,
+        }
+
+    @classmethod
+    def search(cls, needle: str, *, exclude: str | None = None, limit: int = 8) -> list[User]:
+        needle = (needle or "").strip().lower()
+        if not needle:
+            return []
+        safe = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{safe}%"
+        with SessionLocal() as session:
+            stmt = (
+                select(cls)
+                .where(cls.username.like(like, escape="\\"))
+                .where(cls.disabled.is_(False))
+            )
+            if exclude:
+                stmt = stmt.where(cls.username != normalise_username(exclude))
+            rows = list(session.scalars(stmt.limit(24)).all())
+        rows.sort(key=lambda u: (not u.username.startswith(needle), u.username))
+        return rows[:limit]
+
     @classmethod
     def authenticate(cls, username: str, password: str) -> User | None:
         user = cls.get(username)
@@ -177,6 +204,10 @@ class User(Base):
                 old = session.get(User, old_name)
                 if old is not None:
                     session.delete(old)
+                session.execute(update(FriendLink).where(FriendLink.user == old_name).values(user=new_username))
+                session.execute(
+                    update(FriendLink).where(FriendLink.friend == old_name).values(friend=new_username)
+                )
                 session.commit()
             except IntegrityError as exc:
                 session.rollback()
@@ -228,3 +259,58 @@ class User(Base):
             ),
             token_type="bearer",
         )
+
+
+class FriendLink(Base):
+    __tablename__ = "katie_friends"
+
+    user: Mapped[str] = mapped_column(String(64), primary_key=True)
+    friend: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    @classmethod
+    def add(cls, username: str, friend: str) -> None:
+        username = normalise_username(username)
+        friend = normalise_username(friend)
+        if not username or not friend or username == friend:
+            raise PersistError("Could not store user")
+        other = User.get(friend)
+        if other is None or other.disabled:
+            raise PersistError("Could not store user")
+        link = cls(user=username, friend=friend, created_at=utc_now())
+        with SessionLocal() as session:
+            try:
+                session.merge(link)
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                raise PersistError("Could not store user") from exc
+
+    @classmethod
+    def remove(cls, username: str, friend: str) -> None:
+        username = normalise_username(username)
+        friend = normalise_username(friend)
+        with SessionLocal() as session:
+            row = session.scalars(
+                select(cls).where(cls.user == username, cls.friend == friend)
+            ).first()
+            if row is None:
+                return
+            session.delete(row)
+            session.commit()
+
+    @classmethod
+    def usernames_for(cls, username: str) -> set[str]:
+        username = normalise_username(username)
+        with SessionLocal() as session:
+            return set(session.scalars(select(cls.friend).where(cls.user == username)).all())
+
+    @classmethod
+    def list_for(cls, username: str) -> list[User]:
+        names = list(cls.usernames_for(username))
+        if not names:
+            return []
+        with SessionLocal() as session:
+            found = list(session.scalars(select(User).where(User.username.in_(names))).all())
+        by = {u.username: u for u in found}
+        return [by[n] for n in sorted(names) if n in by]
