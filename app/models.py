@@ -252,6 +252,7 @@ class User(Base):
             email=self.email,
             full_name=self.full_name,
             photo=self.photo,
+            admin=ShopAdmin.has(self.username),
             disabled=self.disabled,
         )
 

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from ..database import PersistError, normalise_username
 from ..dependencies import get_current_active_user
-from ..models import FriendLink, User
+from ..models import FriendLink, ShopAdmin, User
 
 router = APIRouter()
 
@@ -24,14 +24,18 @@ def search_users(
     if len(needle) < 1:
         return {"users": []}
     friends = FriendLink.usernames_for(current_user.username)
+    admins = ShopAdmin.usernames()
     users = User.search(needle, exclude=current_user.username, limit=8)
-    return {"users": [u.card(friend=u.username in friends) for u in users]}
+    return {
+        "users": [u.card(friend=u.username in friends, admin=u.username in admins) for u in users]
+    }
 
 
 @router.get("/katie/friends")
 def list_friends(current_user: User = Depends(get_current_active_user)):
     people = FriendLink.list_for(current_user.username)
-    return {"users": [u.card(friend=True) for u in people]}
+    admins = ShopAdmin.usernames()
+    return {"users": [u.card(friend=True, admin=u.username in admins) for u in people]}
 
 
 @router.post("/katie/friends")
@@ -46,7 +50,7 @@ def add_friend(body: FriendIn, current_user: User = Depends(get_current_active_u
         FriendLink.add(current_user.username, name)
     except PersistError as exc:
         raise HTTPException(status_code=503, detail="Could not add friend") from exc
-    return other.card(friend=True)
+    return other.card(friend=True, admin=ShopAdmin.has(other.username))
 
 
 @router.delete("/katie/friends/{username}")

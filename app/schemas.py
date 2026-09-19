@@ -28,6 +28,7 @@ class User(BaseModel):
     email: str | None = None
     full_name: str | None = None
     photo: str | None = None
+    admin: bool = False
     disabled: bool | None = None
 
 
