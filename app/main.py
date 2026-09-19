@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import VERSION, origins
 from app.database import init_db
-from app.routers import auth, buses, devices, fields, health, katie_admin, locations
+from app.routers import auth, buses, devices, fields, health, katie_account, katie_admin, locations
 
 
 @asynccontextmanager
@@ -30,7 +30,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
     max_age=600,
 )
@@ -41,6 +41,7 @@ app.include_router(locations.router)
 app.include_router(devices.router)
 app.include_router(buses.router)
 app.include_router(katie_admin.router)
+app.include_router(katie_account.router)
 init_db()
 
 

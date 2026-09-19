@@ -13,7 +13,14 @@ class User(BaseModel):
     username: str
     email: str | None = None
     full_name: str | None = None
+    photo: str | None = None
     disabled: bool | None = None
+
+
+class UserUpdate(BaseModel):
+    username: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    photo: str | None = None
+    full_name: str | None = None
 
 
 class UserCreate(BaseModel):

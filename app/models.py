@@ -69,6 +69,7 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     hashed_password: Mapped[str] = mapped_column(String(256))
+    photo: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     @classmethod
@@ -81,9 +82,10 @@ class User(Base):
 
     @classmethod
     def create(cls, payload: UserCreate) -> User:
+        email = (payload.email or "").strip().lower() or None
         user = cls(
             username=normalise_username(payload.username),
-            email=payload.email,
+            email=email,
             full_name=payload.full_name,
             disabled=False,
             hashed_password=get_password_hash(payload.password),
@@ -93,14 +95,99 @@ class User(Base):
         return user
 
     @classmethod
+    def get_by_email(cls, email: str) -> User | None:
+        key = (email or "").strip().lower()
+        if not key or "@" not in key:
+            return None
+        from sqlalchemy import select
+
+        with SessionLocal() as session:
+            return session.scalars(select(cls).where(cls.email == key)).first()
+
+    @classmethod
     def authenticate(cls, username: str, password: str) -> User | None:
         user = cls.get(username)
+        if not user and "@" in (username or ""):
+            user = cls.get_by_email(username)
         if not user:
             verify_password(password, DUMMY_HASH)
             return None
         if not user.check_password(password):
             return None
         return user
+
+    @classmethod
+    def from_oauth(cls, *, email: str, full_name: str | None = None, photo: str | None = None) -> User:
+        email = (email or "").strip().lower()
+        if not email or "@" not in email:
+            raise PersistError("Could not store user")
+        existing = cls.get_by_email(email)
+        if existing:
+            if photo and not existing.photo:
+                existing.photo = photo
+                existing.save()
+            if full_name and not existing.full_name:
+                existing.full_name = full_name
+                existing.save()
+            return existing
+        import re
+        import secrets as _secrets
+
+        base = re.sub(r"[^a-z0-9._-]", "", email.split("@")[0].lower()) or "user"
+        name = base[:64]
+        n = 0
+        while cls.get(name):
+            n += 1
+            suffix = str(n)
+            name = (base[: 64 - len(suffix)] + suffix)
+        from .schemas import UserCreate
+
+        user = cls.create(
+            UserCreate(
+                username=name,
+                password=_secrets.token_urlsafe(24),
+                email=email,
+                full_name=full_name,
+            )
+        )
+        if photo:
+            user.photo = photo
+            user.save()
+        return user
+
+    def rename(self, new_username: str) -> User:
+        new_username = normalise_username(new_username)
+        if not new_username or new_username == self.username:
+            return self
+        if User.get(new_username):
+            raise UserExistsError("Username already registered")
+        old_name = self.username
+        clone = User(
+            username=new_username,
+            email=self.email,
+            full_name=self.full_name,
+            disabled=self.disabled,
+            hashed_password=self.hashed_password,
+            photo=self.photo,
+            updated_at=utc_now(),
+        )
+        with SessionLocal() as session:
+            try:
+                session.add(clone)
+                old = session.get(User, old_name)
+                if old is not None:
+                    session.delete(old)
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise UserExistsError("Username already registered") from exc
+            except Exception as exc:
+                session.rollback()
+                raise PersistError("Could not store user") from exc
+        found = User.get(new_username)
+        if found is None:
+            raise PersistError("Could not store user")
+        return found
 
     def check_password(self, password: str) -> bool:
         return verify_password(password, self.hashed_password)
@@ -129,6 +216,7 @@ class User(Base):
             username=self.username,
             email=self.email,
             full_name=self.full_name,
+            photo=self.photo,
             disabled=self.disabled,
         )
 

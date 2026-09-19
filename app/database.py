@@ -49,7 +49,17 @@ def normalise_username(username: str) -> str:
 
 def init_db() -> None:
     from . import models  # noqa: F401 — register tables
+    from sqlalchemy import inspect, text
 
     if DATABASE_URL.startswith("sqlite"):
         Path(engine.url.database or "hackathon.db").parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    try:
+        insp = inspect(engine)
+        if "users" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("users")}
+            if "photo" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN photo TEXT"))
+    except Exception:
+        pass
