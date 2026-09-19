@@ -104,12 +104,13 @@ class User(Base):
         with SessionLocal() as session:
             return session.scalars(select(cls).where(cls.email == key)).first()
 
-    def card(self, *, friend: bool = False) -> dict:
+    def card(self, *, friend: bool = False, admin: bool = False) -> dict:
         return {
             "username": self.username,
             "full_name": self.full_name,
             "photo": self.photo,
             "friend": friend,
+            "admin": admin,
         }
 
     @classmethod
@@ -207,6 +208,9 @@ class User(Base):
                 session.execute(update(FriendLink).where(FriendLink.user == old_name).values(user=new_username))
                 session.execute(
                     update(FriendLink).where(FriendLink.friend == old_name).values(friend=new_username)
+                )
+                session.execute(
+                    update(ShopAdmin).where(ShopAdmin.username == old_name).values(username=new_username)
                 )
                 session.commit()
             except IntegrityError as exc:
@@ -314,3 +318,85 @@ class FriendLink(Base):
             found = list(session.scalars(select(User).where(User.username.in_(names))).all())
         by = {u.username: u for u in found}
         return [by[n] for n in sorted(names) if n in by]
+
+
+class ShopAdmin(Base):
+    __tablename__ = "katie_admins"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    founder: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    @classmethod
+    def has(cls, username: str) -> bool:
+        key = normalise_username(username)
+        if not key:
+            return False
+        with SessionLocal() as session:
+            return session.get(cls, key) is not None
+
+    @classmethod
+    def usernames(cls) -> set[str]:
+        with SessionLocal() as session:
+            return set(session.scalars(select(cls.username)).all())
+
+    @classmethod
+    def count(cls) -> int:
+        from sqlalchemy import func
+
+        with SessionLocal() as session:
+            return int(session.scalar(select(func.count()).select_from(cls)) or 0)
+
+    @classmethod
+    def ensure(cls, username: str, *, founder: bool = False) -> None:
+        key = normalise_username(username)
+        if not key:
+            return
+        with SessionLocal() as session:
+            row = session.get(cls, key)
+            if row is None:
+                session.add(cls(username=key, founder=founder, created_at=utc_now()))
+            elif founder and not row.founder:
+                row.founder = True
+            session.commit()
+
+    @classmethod
+    def add(cls, username: str) -> User:
+        key = normalise_username(username)
+        other = User.get(key)
+        if other is None or other.disabled:
+            raise PersistError("Could not store user")
+        cls.ensure(key, founder=False)
+        return other
+
+    @classmethod
+    def remove(cls, username: str) -> None:
+        key = normalise_username(username)
+        with SessionLocal() as session:
+            row = session.get(cls, key)
+            if row is None:
+                return
+            if row.founder:
+                raise PersistError("founder")
+            if session.scalar(select(cls).where(cls.username != key)) is None:
+                raise PersistError("last")
+            session.delete(row)
+            session.commit()
+
+    @classmethod
+    def people(cls) -> list[dict]:
+        with SessionLocal() as session:
+            rows = list(session.scalars(select(cls).order_by(cls.username)).all())
+            names = [r.username for r in rows]
+            founders = {r.username for r in rows if r.founder}
+            users = list(session.scalars(select(User).where(User.username.in_(names))).all()) if names else []
+        by = {u.username: u for u in users}
+        out = []
+        for name in names:
+            if name in by:
+                card = by[name].card(admin=True)
+            else:
+                card = {"username": name, "full_name": None, "photo": None, "friend": False, "admin": True}
+            card["founder"] = name in founders
+            out.append(card)
+        return out
