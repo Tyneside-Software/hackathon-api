@@ -44,6 +44,7 @@ uvicorn app.main:app --reload --port 8080
 - http://127.0.0.1:8080/health  
 - http://127.0.0.1:8080/test_field  
 - http://127.0.0.1:8080/docs  
+- Katie Admin: `POST /katie/admin/login` and `POST /katie/admin/verify`
 
 ## Routes
 
@@ -63,6 +64,8 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/v1/devices/{id}` | One phone |
 | GET | `/v1/locations?device_id=` | Ping history (`source`: firestore / datastore / none) |
 | GET | `/v1/buses` | Live buses + 10 min `trails`; bustimes.org only on a stale looking GET |
+| POST | `/katie/admin/login` | Katie shop Admin password check → session token |
+| POST | `/katie/admin/verify` | Check a Katie Admin session token |
 
 **Proven 11 September 2026:** emulator `POST /v1/locations` → HTTP 200 `stored=datastore`; `GET /v1/devices` listed `android-c55e59830b71ba38`. Live `/health` is **0.1.8** with `/v1/buses` trails.
 

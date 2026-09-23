@@ -1,6 +1,7 @@
 """SQLAlchemy engine and session for the local SQLite file."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,7 +50,24 @@ def normalise_username(username: str) -> str:
 
 def init_db() -> None:
     from . import models  # noqa: F401 — register tables
+    from sqlalchemy import inspect, text
 
     if DATABASE_URL.startswith("sqlite"):
         Path(engine.url.database or "hackathon.db").parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    try:
+        insp = inspect(engine)
+        if "users" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("users")}
+            if "photo" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN photo TEXT"))
+    except Exception:
+        pass
+    try:
+        from .models import ShopAdmin
+
+        founder = os.getenv("KATIE_ADMIN_USERNAME", "LewisThomson")
+        ShopAdmin.ensure(founder, founder=True)
+    except Exception:
+        pass

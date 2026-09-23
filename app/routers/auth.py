@@ -9,7 +9,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from ..database import PersistError, UserExistsError
 from ..dependencies import get_current_active_user
 from ..models import User
-from ..schemas import LoginRequest, Token, User as UserPublic, UserCreate
+from ..schemas import LoginRequest, Token, User as UserPublic, UserCreate, UserUpdate
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ def login_or_401(username: str, password: str) -> Token:
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail="Incorrect email, username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if user.disabled:
@@ -31,6 +31,12 @@ def login_or_401(username: str, password: str) -> Token:
 def register(payload: UserCreate) -> UserPublic:
     if User.get(payload.username):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered")
+    email = (payload.email or "").strip().lower()
+    if email:
+        if "@" not in email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Enter a real email")
+        if User.get_by_email(email):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     try:
         return User.create(payload).public()
     except UserExistsError:
@@ -61,3 +67,34 @@ async def read_users_me(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> UserPublic:
     return current_user.public()
+
+
+@router.patch("/users/me")
+def update_me(
+    payload: UserUpdate,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    from ..database import PersistError, UserExistsError
+
+    if payload.photo is not None:
+        if len(payload.photo) > 500_000:
+            raise HTTPException(status_code=400, detail="Picture is too large")
+        current_user.photo = payload.photo
+    if payload.full_name is not None:
+        current_user.full_name = payload.full_name.strip() or None
+    token = None
+    try:
+        if payload.username:
+            current_user = current_user.rename(payload.username)
+            token = current_user.issue_token().access_token
+        else:
+            current_user.save()
+    except UserExistsError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered")
+    except PersistError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not store user")
+    body = current_user.public().model_dump()
+    if token:
+        body["access_token"] = token
+        body["token_type"] = "bearer"
+    return body

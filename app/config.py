@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 
-VERSION = "0.1.9"
+VERSION = "0.1.19"
 log = logging.getLogger("hackathon-api")
 
 # Live buses: one upstream fetch shared by every map tab. TTL is how long we
@@ -31,9 +31,18 @@ BUS_UPSTREAM = (
 _raw = os.getenv(
     "CORS_ORIGINS",
     "http://127.0.0.1:5500,http://localhost:5500,"
-    "https://hackathon.tyneside.software,https://michaelthomsoncc.github.io",
+    "https://hackathon.tyneside.software,https://tyneside.software,"
+    "https://michaelthomsoncc.github.io",
 )
 origins = [o.strip() for o in _raw.split(",") if o.strip()]
+for extra in (
+    "https://hackathon.tyneside.software",
+    "https://tyneside.software",
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+):
+    if extra not in origins:
+        origins.append(extra)
 
 # openssl rand -hex 32 — set JWT_SECRET_KEY on Cloud Run so tokens survive restarts.
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY") or ""
