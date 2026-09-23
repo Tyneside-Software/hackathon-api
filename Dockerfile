@@ -1,10 +1,9 @@
-# mirror.gcr.io is Google's Docker Hub cache — Cloud Build often fails
-# with toomanyrequests if it pulls python:3.13-slim from docker.io directly.
-FROM mirror.gcr.io/library/python:3.13-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8080
+    PORT=8080 \
+    DATABASE_URL=sqlite:////data/hackathon.db
 
 WORKDIR /app
 
@@ -14,6 +13,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY app ./app
 COPY main.py ./main.py
+
+RUN mkdir -p /data
 
 EXPOSE 8080
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]
