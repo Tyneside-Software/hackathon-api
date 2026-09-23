@@ -1,10 +1,9 @@
-"""Shop accounts in Firestore so they survive Cloud Run deploys.
+"""Shop accounts.
 
-Falls back to None when Firestore is missing (local SQLite still works).
+Firestore is switched off — SQLite is the only store.
 """
 from __future__ import annotations
 
-from .config import log
 from .database import utc_now
 
 _USERS = "katie_users"
@@ -12,28 +11,13 @@ _FRIENDS = "katie_friends"
 _ADMINS = "katie_admins"
 _PROFILES = "katie_profiles"
 
-_client = None
-_tried = False
-
 
 def client():
-    global _client, _tried
-    if _tried:
-        return _client
-    _tried = True
-    try:
-        from google.cloud import firestore
-
-        _client = firestore.Client()
-        _client.collection(_USERS).document("_ping").get()
-    except Exception as exc:
-        log.warning("Firestore accounts off; SQLite only: %s", exc)
-        _client = None
-    return _client
+    return None
 
 
 def enabled() -> bool:
-    return client() is not None
+    return False
 
 
 def _db():

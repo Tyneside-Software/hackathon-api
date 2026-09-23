@@ -3,7 +3,7 @@ FROM python:3.14-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8080 \
-    DATABASE_URL=sqlite:////data/hackathon.db
+    DATABASE_URL=sqlite:////app/hackathon.db
 
 WORKDIR /app
 
@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY app ./app
 COPY main.py ./main.py
-
-RUN mkdir -p /data
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 
 EXPOSE 8080
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]
+ENTRYPOINT ["./docker-entrypoint.sh"]

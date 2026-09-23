@@ -4,4 +4,3 @@ sqlalchemy>=2.0,<3
 python-multipart
 pyjwt
 pwdlib[argon2]
-google-cloud-firestore
