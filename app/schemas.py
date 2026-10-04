@@ -67,6 +67,11 @@ class FieldPayload(BaseModel):
     value: str
 
 
+class DeviceLinkPayload(BaseModel):
+    device_id: str = Field(min_length=1, max_length=128)
+    nickname: str | None = Field(default=None, max_length=64)
+
+
 class LocationPayload(BaseModel):
     device_id: str = Field(min_length=1, max_length=128)
     lat: float = Field(ge=-90, le=90)

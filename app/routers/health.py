@@ -23,6 +23,7 @@ def root() -> dict:
         "users_me": "/users/me",
         "locations": "/v1/locations",
         "devices": "/v1/devices",
+        "me_devices": "/v1/me/devices",
         "buses": "/v1/buses",
         "version": VERSION,
     }

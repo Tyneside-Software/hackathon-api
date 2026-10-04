@@ -37,6 +37,17 @@ class Device(Base):
     updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class DeviceLink(Base):
+    """One phone belongs to one account."""
+
+    __tablename__ = "device_links"
+
+    device_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), index=True)
+    nickname: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    linked_at: Mapped[str] = mapped_column(String(64))
+
+
 class LocationPing(Base):
     __tablename__ = "location_pings"
 

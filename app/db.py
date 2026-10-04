@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from .config import log
 from .database import PersistError, SessionLocal, UserExistsError, normalise_username, utc_now
-from .models import BusCache, Device, FieldRecord, LocationPing
+from .models import BusCache, Device, DeviceLink, FieldRecord, LocationPing
 
 # Last decoded bus snapshot in this process. SQLite is only read on a miss
 # or after an upstream refresh.
@@ -20,6 +20,9 @@ __all__ = [
     "device_public",
     "get_device_row",
     "get_field",
+    "link_device",
+    "list_linked_devices",
+    "set_device_nickname",
     "list_device_rows",
     "list_pings",
     "load_bus_cache",
@@ -50,6 +53,8 @@ def device_public(row: dict) -> dict:
         "heading": row.get("heading"),
         "speed_mps": row.get("speed_mps"),
         "updated_at": row.get("updated_at"),
+        "nickname": row.get("nickname"),
+        "username": row.get("username"),
     }
 
 
@@ -114,12 +119,97 @@ def save_location(row: dict, ping: dict) -> str:
             raise PersistError("Could not store location") from exc
 
 
+def _link_public(link: DeviceLink) -> dict:
+    nick = (link.nickname or "").strip() or None
+    return {
+        "device_id": link.device_id,
+        "username": link.username,
+        "nickname": nick,
+        "linked_at": link.linked_at,
+    }
+
+
 def list_device_rows() -> list[dict]:
     with SessionLocal() as session:
-        rows = list(session.scalars(select(Device)).all())
-    out = [device_public(_device_to_row(d)) for d in rows]
-    out.sort(key=lambda d: d.get("last_seen_at") or "", reverse=True)
+        devices = {d.device_id: d for d in session.scalars(select(Device)).all()}
+        links = {l.device_id: l for l in session.scalars(select(DeviceLink)).all()}
+        latest_ping = {}
+        for p in session.scalars(select(LocationPing).order_by(LocationPing.recorded_at.desc())).all():
+            if p.device_id not in latest_ping:
+                latest_ping[p.device_id] = p
+    out = []
+    for did in set(devices) | set(latest_ping):
+        d = devices.get(did)
+        p = latest_ping.get(did)
+        row = _device_to_row(d) if d else {"device_id": did}
+        if p and isinstance(p.lat, (int, float)) and isinstance(p.lng, (int, float)):
+            row["last_lat"] = p.lat
+            row["last_lng"] = p.lng
+            row["last_seen_at"] = p.recorded_at or row.get("last_seen_at")
+            if p.accuracy_m is not None:
+                row["accuracy_m"] = p.accuracy_m
+        link = links.get(did)
+        if link:
+            row["nickname"] = (link.nickname or "").strip() or None
+            row["username"] = link.username
+        out.append(device_public(row))
+    out.sort(key=lambda item: item.get("last_seen_at") or "", reverse=True)
     return out
+
+
+def link_device(username: str, device_id: str, nickname: str | None = None) -> dict:
+    device_id = (device_id or "").strip()
+    username = normalise_username(username)
+    nick = (nickname or "").strip() or None
+    if nick and len(nick) > 64:
+        nick = nick[:64]
+    if not device_id or not username:
+        raise PersistError("Could not link device")
+    with SessionLocal() as session:
+        existing = session.get(DeviceLink, device_id)
+        if existing is not None and existing.username != username:
+            raise UserExistsError("Device already linked to another account")
+        now = utc_now()
+        if existing is None:
+            existing = DeviceLink(
+                device_id=device_id,
+                username=username,
+                nickname=nick,
+                linked_at=now,
+            )
+            session.add(existing)
+        else:
+            if nick is not None:
+                existing.nickname = nick
+        session.commit()
+        return _link_public(existing)
+
+
+def set_device_nickname(username: str, device_id: str, nickname: str) -> dict:
+    device_id = (device_id or "").strip()
+    username = normalise_username(username)
+    nick = (nickname or "").strip()
+    if not nick:
+        raise PersistError("Nickname cannot be empty")
+    if len(nick) > 64:
+        nick = nick[:64]
+    with SessionLocal() as session:
+        existing = session.get(DeviceLink, device_id)
+        if existing is None or existing.username != username:
+            raise PersistError("Device is not linked to this account")
+        existing.nickname = nick
+        session.commit()
+        return _link_public(existing)
+
+
+def list_linked_devices(username: str) -> list[dict]:
+    key = normalise_username(username)
+    with SessionLocal() as session:
+        rows = list(
+            session.scalars(select(DeviceLink).where(DeviceLink.username == key)).all()
+        )
+    rows.sort(key=lambda r: r.linked_at or "", reverse=True)
+    return [_link_public(r) for r in rows]
 
 
 def get_device_row(device_id: str) -> dict | None:
@@ -127,7 +217,12 @@ def get_device_row(device_id: str) -> dict | None:
         dev = session.get(Device, device_id)
         if dev is None:
             return None
-        return device_public(_device_to_row(dev))
+        row = _device_to_row(dev)
+        link = session.get(DeviceLink, device_id)
+        if link:
+            row["nickname"] = (link.nickname or "").strip() or None
+            row["username"] = link.username
+        return device_public(row)
 
 
 def list_pings(device_id: str, take: int) -> list[dict]:

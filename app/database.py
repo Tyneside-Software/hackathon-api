@@ -62,6 +62,11 @@ def init_db() -> None:
             if "photo" not in cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE users ADD COLUMN photo TEXT"))
+        if "device_links" in insp.get_table_names():
+            link_cols = {c["name"] for c in insp.get_columns("device_links")}
+            if "nickname" not in link_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
     except Exception:
         pass
     try:
