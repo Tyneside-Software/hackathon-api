@@ -18,6 +18,7 @@ from app.config import VERSION, origins
 from app.database import init_db
 from app.routers import (
     auth,
+    board,
     buses,
     devices,
     fields,
@@ -51,6 +52,7 @@ app.include_router(fields.router)
 app.include_router(locations.router)
 app.include_router(devices.router)
 app.include_router(buses.router)
+app.include_router(board.router)
 app.include_router(katie_admin.router)
 app.include_router(katie_account.router)
 app.include_router(katie_friends.router)

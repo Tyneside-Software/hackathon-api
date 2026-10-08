@@ -1,0 +1,584 @@
+{
+  "people": [
+    {
+      "id": "reeve",
+      "name": "Reeve",
+      "emoji": "🧭"
+    },
+    {
+      "id": "connor",
+      "name": "Connor",
+      "emoji": "⚡"
+    },
+    {
+      "id": "michael",
+      "name": "Michael",
+      "emoji": "🏗️"
+    },
+    {
+      "id": "lewis",
+      "name": "Lewis",
+      "emoji": "🌱"
+    },
+    {
+      "id": "noah",
+      "name": "Noah",
+      "emoji": "🔧"
+    }
+  ],
+  "cards": [
+    {
+      "id": "48",
+      "person": "michael",
+      "hours": 1.5,
+      "emoji": "🏗️",
+      "title": "Snap bus trails to the streets (OSRM)",
+      "column": "done",
+      "tag": "OSRM trails",
+      "tag_kind": "ok",
+      "brief": "<p>The 10-minute bus trail was a straight line between GPS pings. It now uses the same public OSRM driving router as <strong>Calculate route</strong>.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>One OSRM request per in-view bus (trail waypoints, max 20). Queued two at a time so we do not hammer the public router.</li>\n  <li>Straight line first, then it snaps when OSRM answers. Result is cached until the trail changes.</li>\n  <li>Fade still runs along the snapped path. Trail clicks do not add waypoints.</li>\n</ul>\n<p>Hard-refresh <a href=\"app/\">/app/</a>. Wiki: <a href=\"docs/#buses\">Live buses</a>.</p>"
+    },
+    {
+      "id": "47",
+      "person": "noah",
+      "hours": 1,
+      "emoji": "🔧",
+      "title": "Show / hide phones on the map, remembered",
+      "column": "done",
+      "tag": "phone toggle",
+      "tag_kind": "ok",
+      "brief": "<p>Noah added a Show phones / Hide phones control, same pattern as buses. Preference is stored in <code>localStorage</code> (<code>hackathon-map-phones</code>) so it survives a refresh.</p>\n<p><code>f35b560</code>. Hard-refresh <a href=\"app/\">/app/</a>.</p>"
+    },
+    {
+      "id": "46",
+      "person": "michael",
+      "hours": 1.5,
+      "emoji": "🏗️",
+      "title": "10-minute fading trail behind each bus",
+      "column": "done",
+      "tag": "bus trails",
+      "tag_kind": "ok",
+      "brief": "<p>Each live bus keeps where it has been for the last 10 minutes. The trail fades to invisible at 10 minutes.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>API stores <code>trails</code> on Firestore <code>BusCache/newcastle</code> — <code>[lng, lat, unix]</code> per vehicle, pruned at 10 minutes.</li>\n  <li>History only grows while a tab is looking (same lazy fetch as card 45). Idle: no new points.</li>\n  <li>Map draws the trail in the bus’s colour, older segments more transparent. Clicks pass through.</li>\n</ul>\n<p>API <strong>0.1.8</strong>. Hard-refresh <a href=\"app/\">/app/</a>. Wiki: <a href=\"docs/#buses\">Live buses</a>.</p>"
+    },
+    {
+      "id": "45",
+      "person": "michael",
+      "hours": 2,
+      "emoji": "🏗️",
+      "title": "Cache live buses in Firestore; map reads our API",
+      "column": "done",
+      "tag": "BusCache",
+      "tag_kind": "ok",
+      "brief": "<p>Every map tab was calling bustimes.org every 15s. That does not scale, and it hammers someone else’s feed.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>Map <code>GET /v1/buses</code> only while Show buses is on. Hidden tab and Off: no request.</li>\n  <li>API serves Firestore <code>BusCache/newcastle</code> if it is younger than 15s. Otherwise it fetches bustimes.org once, slims the payload, writes the snapshot.</li>\n  <li>Unlimited looking tabs, one upstream refresh. Nobody looking: no refresh.</li>\n  <li>Phone GPS and map GETs stay open. Bustimes.org is never called from the browser.</li>\n</ul>\n<p>API <strong>0.1.7</strong>. Wiki: <a href=\"docs/#buses\">Live buses</a>.</p>"
+    },
+    {
+      "id": "41",
+      "person": "noah",
+      "hours": 3,
+      "emoji": "🔧",
+      "title": "API user accounts / OAuth2 token",
+      "column": "done",
+      "tag": "register · login",
+      "tag_kind": "ok",
+      "brief": "<p>Noah shipped register, login, and <code>GET /users/me</code> on API <strong>0.1.6</strong> (<code>830036a</code>). Live <code>/health</code> is now <strong>0.1.7</strong> (buses cache on top). No further Noah commits after this card.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>API: <code>POST /register</code>, <code>POST /login</code> (JSON), <code>POST /token</code> (OAuth2 form), <code>GET /users/me</code> (bearer). Users persist in Firestore, Datastore fallback, process cache.</li>\n  <li>Site <code>625b5dc</code>: <a href=\"account.html\">/account.html</a> — create account, log in, Fetch me. Token in <code>sessionStorage</code>.</li>\n  <li>Phone GPS, map GETs, and <code>/v1/buses</code> stay open. Only <code>/users/me</code> requires a token.</li>\n  <li>Set <code>JWT_SECRET_KEY</code> on Cloud Run so tokens survive a new revision.</li>\n</ul>\n<p>Wiki: <a href=\"docs/#api\">API</a>.</p>"
+    },
+    {
+      "id": "44",
+      "person": "michael",
+      "hours": 2,
+      "emoji": "🏗️",
+      "title": "Buses: viewport, dots then chips, no waypoint steal",
+      "column": "done",
+      "tag": "map polish",
+      "tag_kind": "ok",
+      "brief": "<p>First buses toggle (39) drew every live vehicle in 30 miles as a rotated line chip — about 300 labels, unreadable at city zoom, and a click dropped a waypoint.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>Draw only what is in the current view. Pan/zoom repaints the last fetch; no extra request.</li>\n  <li>Drawn at every zoom. Below 14: coloured dots. Zoom 14+: upright line-number chips, heading pip, operator colour.</li>\n  <li>Pings older than 10 minutes stay hidden. Status shows <strong>newest ping</strong> age so the feed is visibly moving.</li>\n  <li>Bus click opens a popup and does not add a waypoint.</li>\n</ul>\n<p>Hard-refresh <a href=\"app/\">/app/</a>. Demo <a href=\"app/?buses=1\">/app/?buses=1</a> or <a href=\"app/?buses=1&amp;zoom=14\">&amp;zoom=14</a>. Wiki: <a href=\"docs/#buses\">Live buses</a>.</p>"
+    },
+    {
+      "id": "43",
+      "person": "michael",
+      "hours": 0.5,
+      "emoji": "🏗️",
+      "title": "Show buses actually fetches; ghost buttons hover",
+      "column": "done",
+      "tag": "map buttons",
+      "tag_kind": "ok",
+      "brief": "<p>Live map: Show buses stayed on “Off — no data fetched” because the first fetch was aborted by <code>stopBusPoll()</code>. Clear and Show buses are <code>btn-ghost</code> and had no hover or pointer, so they felt dead.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>First fetch runs, then the 15s poll. Sidebar sits above the map so clicks land.</li>\n  <li>Ghost buttons hover (amber wash) and use <code>cursor: pointer</code>.</li>\n</ul>\n<p><code>f596040</code>. Hard-refresh <a href=\"app/\">/app/</a> if the old JS is cached.</p>"
+    },
+    {
+      "id": "42",
+      "person": "michael",
+      "hours": 1.5,
+      "emoji": "🏗️",
+      "title": "Tracker POSTs every minute; pin on Newcastle",
+      "column": "done",
+      "tag": "heartbeat · Tyne",
+      "tag_kind": "ok",
+      "brief": "<p>Emulator sat still and the map age froze. The app now POSTs every minute even if lat/lng are unchanged. <code>recorded_at</code> is last communication, which is the map timestamp.</p>\n<p>This AVD ignores console <code>geo fix</code> and caches Google HQ. High-accuracy GPS plus a remap of that HQ default puts the debug pin on Grey’s Monument. A real GPS fix is used as-is.</p>\n<p>Commits: <code>cc59adc</code> heartbeat, <code>38690d0</code> communication time, <code>0fb80ce</code> Newcastle.</p>"
+    },
+    {
+      "id": "40",
+      "person": "noah",
+      "hours": 2,
+      "emoji": "🔧",
+      "title": "Split the API into FastAPI routers",
+      "column": "done",
+      "tag": "app/routers",
+      "tag_kind": "ok",
+      "brief": "<p>Noah split <code>app/main.py</code> into modules so accounts and GPS can grow without one giant file.</p>\n<ul>\n  <li><code>app/routers/</code> — health, fields, locations, devices (then <code>auth</code> in 41, <code>buses</code> in 45)</li>\n  <li><code>app/config.py</code> — VERSION, CORS</li>\n  <li><code>app/db.py</code>, <code>app/schemas.py</code>, <code>app/dependencies.py</code></li>\n</ul>\n<p><code>57a1d44</code>. Cloud Run still execs <code>app/main.py</code> (<code>uvicorn.run(app)</code> stays at the bottom).</p>"
+    },
+    {
+      "id": "39",
+      "person": "michael",
+      "hours": 2,
+      "emoji": "🏗️",
+      "title": "Live buses on the map (toggle, 30 miles of Newcastle)",
+      "column": "done",
+      "tag": "bustimes.org",
+      "tag_kind": "ok",
+      "brief": "<p>Show buses / Hide buses on <a href=\"app/\">/app/</a>. Off by default. First version polled bustimes.org from the browser. That fetch path is now card <strong>45</strong>: the map calls our <code>GET /v1/buses</code>, and the API caches Firestore.</p>\n<p>Toggle, 30-mile circle, no <code>fitBounds</code>, feed-down status: still this card. Readable chips: 44. Shared cache: 45. Wiki: <a href=\"docs/#buses\">Live buses</a>.</p>"
+    },
+    {
+      "id": "36",
+      "person": "noah",
+      "hours": 2,
+      "emoji": "🔧",
+      "title": "Review the live-phone path, then take it forward",
+      "column": "done",
+      "tag": "phones on map",
+      "tag_kind": "ok",
+      "brief": "<p>Noah took over live phones. He went past review and shipped the next slices on <code>main</code>: phone list cards, a device drawer, and ping history on the map.</p>\n<h3>What’s live (11 September 2026)</h3>\n<ul>\n  <li>Site: <code>76d3a41</code> list cards zoom to last-known; <code>d2a52e6</code> drawer + history path; <code>c6ec189</code> list every LocationPing.</li>\n  <li>API: <code>6995771</code> <code>GET /v1/locations</code> reads Firestore, Datastore fallback.</li>\n  <li>Android: <code>b12a0ec</code> switch state resumes; <code>62e0c0d</code> Gradle.</li>\n</ul>"
+    },
+    {
+      "id": "37",
+      "person": "noah",
+      "hours": 3,
+      "emoji": "🔧",
+      "title": "Several phones on the map, easy to tell apart",
+      "column": "done",
+      "tag": "phone cards",
+      "tag_kind": "ok",
+      "brief": "<p>Last-known markers when two or more devices are pinging, distinguishable without a debugger.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>Sidebar phone cards (not a pile of identical dots). Click zooms to last-known.</li>\n  <li>Fresh / stale styling. Waypoint routing still works.</li>\n</ul>\n<p>Noah, 11 September 2026, <code>76d3a41</code>.</p>"
+    },
+    {
+      "id": "38",
+      "person": "noah",
+      "hours": 3,
+      "emoji": "🔧",
+      "title": "Show history as a route on the map",
+      "column": "done",
+      "tag": "ping history",
+      "tag_kind": "ok",
+      "brief": "<p>Default view is current location only. A device drawer has <strong>Show history on map</strong>, which plots unique pings as a path. Hide returns to last-known.</p>\n<h3>What’s live</h3>\n<ul>\n  <li>Site drawer + polyline. Consecutive pings at the same place are hidden (<code>df3a789</code>).</li>\n  <li>API <code>GET /v1/locations?device_id=</code> reads Firestore, Datastore fallback, <code>source</code> in the JSON.</li>\n</ul>\n<p>Noah, 11 September 2026.</p>"
+    },
+    {
+      "id": "32",
+      "person": "michael",
+      "hours": 4,
+      "emoji": "🏗️",
+      "title": "Android app: tracking toggle, GPS to the API",
+      "column": "done",
+      "brief": "<p>One switch on <a href=\"https://github.com/Tyneside-Software/hackathon-android\">hackathon-android</a>: tracking on or off. While on, the phone reads GPS and POSTs to the API. Device id is Android ID (serial/IMEI are locked on modern Android).</p>\n<h3>Done when</h3>\n<ul>\n  <li>A debug APK installs on a phone or emulator.</li>\n  <li>Toggle on starts a foreground location service; toggle off stops it.</li>\n  <li>The phone POSTs <code>/v1/locations</code> with device id, lat, lng.</li>\n</ul>\n<h3>What’s live (11 September 2026)</h3>\n<ul>\n  <li>Pixel 6a emulator: POST HTTP 200 <code>stored=datastore</code>, device <code>android-c55e59830b71ba38</code>.</li>\n  <li>API stores the ping (card 33). Map draws it (card 34). The three-slice path is working.</li>\n  <li>Log tag <code>TynesideTracker</code>. POSTs every minute (heartbeat) even if lat/lng are unchanged. <code>recorded_at</code> is last communication.</li>\n  <li>This AVD ignores <code>geo fix</code>; the debug app remaps Google HQ last-known to Grey’s Monument, Newcastle.</li>\n</ul>\n<p>A physical phone is card 35.</p>",
+      "tag": "emulator · POST 200",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "33",
+      "person": "michael",
+      "hours": 3,
+      "emoji": "🏗️",
+      "title": "API stores GPS pings in the database",
+      "column": "done",
+      "brief": "<p>Live phones need the API to accept <code>POST /v1/locations</code> (device id, lat, lng) and persist last-known position so the map can read it back. Datastore, same as the rest of the API. <code>/health</code> stays cheap if the database is down.</p>\n<h3>Done when</h3>\n<ul>\n  <li>A POST from the Android app writes a device’s last lat/lng.</li>\n  <li><code>GET /v1/devices</code> returns last-known phones for the map.</li>\n  <li>History can live in a ping kind; last-known is enough for v0.</li>\n</ul>\n<h3>What’s live (11 September 2026)</h3>\n<ul>\n  <li>Cloud Run: emulator POST HTTP 200 <code>stored=datastore</code>. Code <code>VERSION</code> <strong>0.1.5</strong>.</li>\n  <li><code>GET /v1/devices</code> returns last-known phones. History: <code>GET /v1/locations?device_id=</code> (Firestore, Datastore fallback).</li>\n  <li>Kinds: <code>Device</code> (last-known) and <code>LocationPing</code> (history).</li>\n</ul>\n<p>Shipped on <code>main</code> so the demo works. Repo: <a href=\"https://github.com/Tyneside-Software/hackathon-api\">hackathon-api</a>.</p>",
+      "tag": "POST /v1/locations",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "34",
+      "person": "michael",
+      "hours": 3,
+      "emoji": "🏗️",
+      "title": "Map shows the phone’s current coordinates",
+      "column": "done",
+      "brief": "<p>The map polls last-known devices and draws each phone on <code>/app/</code> next to the waypoint pins.</p>\n<h3>Done when</h3>\n<ul>\n  <li>The map shows a marker for each device that has pinged.</li>\n  <li>The marker updates when the API has a newer fix (poll is fine).</li>\n  <li>Waypoint routing still works if the API is quiet.</li>\n</ul>\n<h3>What’s live (11 September 2026)</h3>\n<ul>\n  <li><code>app/map.js</code> polls <code>GET /v1/devices</code> every 8s, amber circle markers, Phones list.</li>\n  <li>Emulator device is in Datastore; the map is drawing it.</li>\n</ul>\n<p>Shipped on <code>main</code> so the demo works. Repo: <a href=\"https://github.com/Tyneside-Software/hackathon-site\">hackathon-site</a>.</p>",
+      "tag": "map phones",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "17",
+      "person": "reeve",
+      "hours": 0.75,
+      "emoji": "🧭",
+      "title": "Reeve: GitHub edit → run → push (API repo)",
+      "column": "done",
+      "brief": "<p>Prove the org-repo loop on <strong>hackathon-api</strong>. Tiny change, still serves <code>/health</code>, then push to <code>origin/main</code>.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Commit is visible on <a href=\"https://github.com/Tyneside-Software/hackathon-api\">Tyneside-Software/hackathon-api</a>.</li>\n                  <li><code>/health</code> still works after the change.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Pull latest, edit something harmless (comment, README, label).</li>\n                  <li>Hit <code>/health</code> again.</li>\n                  <li><code>git add</code> · <code>git commit</code> · <code>git push origin main</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html#git\">Git steps</a></div>",
+      "tag": "API repo loop",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "31",
+      "person": "noah",
+      "hours": 12,
+      "emoji": "🔧",
+      "title": "Noah: API talks to Firestore",
+      "column": "done",
+      "tag": "Datastore / Firestore",
+      "tag_kind": "ok",
+      "brief": "<p>Wire <code>hackathon-api</code> to Firestore (code currently imports Datastore in <code>POST /create_field</code>). The handler should take a real key/value, write it, and read it back. Cloud Run is live; this is persistence, not deploy.</p>\n<h3>Done when</h3>\n<ul>\n  <li><code>POST /create_field</code> (or a clearer route) stores a field in GCP and returns an id.</li>\n  <li>A GET can read that field back from the live API.</li>\n  <li><code>/health</code> still works if Firestore is down.</li>\n  <li>The Cloud Run service account has datastore/firestore access.</li>\n</ul>\n<h3>How</h3>\n<ol>\n  <li>Use the official client (<code>google-cloud-firestore</code> or Datastore — pick one and document it).</li>\n  <li>Do not import the client at module top if that can crash Cloud Run when credentials are missing — lazy import or catch and return 503.</li>\n  <li>Add a GET so Alpine can prove the round-trip (extend <code>api-test.html</code> or a new island).</li>\n</ol>"
+    },
+    {
+      "id": "28",
+      "person": "michael",
+      "hours": 1,
+      "emoji": "🏗️",
+      "title": "Alpine.js test page calls GET /test_field",
+      "column": "done",
+      "tag": "api-test.html",
+      "tag_kind": "ok",
+      "brief": "<p>First Alpine.js island on the site. <code>api-test.html</code> loads Alpine 3.14.8 and <code>config.js</code>, then <code>GET /test_field</code> on Cloud Run and shows the JSON.</p>\n<h3>Done when</h3>\n<ul>\n  <li>The page is in the nav and runs without <code>board.js</code>.</li>\n  <li><code>config.js</code> points at the live Cloud Run URL.</li>\n</ul>\n<div class=\"brief-actions\"><a class=\"btn btn-fill\" href=\"api-test.html\">Open API test →</a></div>"
+    },
+    {
+      "id": "29",
+      "person": "michael",
+      "hours": 2,
+      "emoji": "🏗️",
+      "title": "Docs wiki (Docs in the nav)",
+      "column": "done",
+      "tag": "/docs/",
+      "tag_kind": "ok",
+      "brief": "<p>Linked wiki at <code>/docs/</code>: markdown in <code>docs/</code>, sidebar from <code>pages.json</code>, Alpine + marked. Architecture, stack, Alpine, API, Connor shelf, For Grok.</p>\n<h3>Done when</h3>\n<ul>\n  <li>Docs is in the main nav.</li>\n  <li>A new page is a markdown file plus a <code>pages.json</code> entry.</li>\n</ul>\n<div class=\"brief-actions\"><a class=\"btn btn-fill\" href=\"docs/\">Open wiki →</a></div>"
+    },
+    {
+      "id": "30",
+      "person": "michael",
+      "hours": 1.5,
+      "emoji": "🏗️",
+      "title": "Cloud Run GitHub builds (buildpacks, Python 3.13)",
+      "column": "done",
+      "tag": "pack · 3.13",
+      "tag_kind": "ok",
+      "brief": "<p>GitHub → Cloud Run uses <strong>buildpacks</strong> (<code>pack</code> on ubuntu2404), not the Dockerfile. Pinning Python 3.12 failed the build. Root <code>main.py</code>, <code>Procfile</code>, and <code>.python-version</code> 3.13 make pack succeed. Build is working again.</p>\n<h3>Done when</h3>\n<ul>\n  <li>Cloud Build is green on push to API <code>main</code>.</li>\n  <li><code>GET /health</code> reports version 0.1.3 or later.</li>\n</ul>"
+    },
+    {
+      "id": "14",
+      "person": "lewis",
+      "hours": 0.75,
+      "emoji": "🌱",
+      "title": "Lewis: GitHub edit → run → push (site repo)",
+      "column": "done",
+      "brief": "<p>Prove the org-repo loop on <strong>hackathon-site</strong>: a tiny visible change, still runs, then push to <code>origin/main</code>. Not a personal fork unless you have been told otherwise.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Your commit is on <a href=\"https://github.com/Tyneside-Software/hackathon-site\">Tyneside-Software/hackathon-site</a>.</li>\n                  <li>Home / Map / Board still load after the change.</li>\n                  <li>This card moves to Done.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Pull latest <code>main</code>.</li>\n                  <li>Make a small visible edit (name in a comment, README line, harmless label).</li>\n                  <li>Confirm it still runs locally.</li>\n                  <li><code>git add</code> · <code>git commit</code> · <code>git push origin main</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html#git\">Git steps</a></div>",
+      "tag": "Tyneside-Software/hackathon-site",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "18",
+      "person": "connor",
+      "hours": 0.5,
+      "emoji": "⚡",
+      "title": "Connor: get the front end running locally",
+      "column": "done",
+      "brief": "<p>Connor’s first onboarding slice: the desktop site running locally so the routing work can be demoed on his machine.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Home, Map, and Board all load at <code>http://127.0.0.1:5500/</code>.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-site\">hackathon-site</a>.</li>\n                  <li><code>.\\start.ps1</code> or <code>python -m http.server 5500</code> from that folder.</li>\n                  <li>Skip <code>file://</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "clone org repo · serve.ps1 · home + map + board",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "19",
+      "person": "connor",
+      "hours": 0.75,
+      "emoji": "⚡",
+      "title": "Connor: GitHub edit → run → push (site repo)",
+      "column": "done",
+      "brief": "<p>Prove the org-repo loop on <strong>hackathon-site</strong>. Small visible change, still runs, push to <code>origin/main</code>.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Commit is on <a href=\"https://github.com/Tyneside-Software/hackathon-site\">Tyneside-Software/hackathon-site</a>.</li>\n                  <li>The site still looks working.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Pull, edit, run, commit, push — same as the GitHub loop at the bottom of this board.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html#git\">Git steps</a></div>",
+      "tag": "Tyneside-Software/hackathon-site",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "20",
+      "person": "michael",
+      "hours": 0.75,
+      "emoji": "🏗️",
+      "title": "Michael: GitHub edit → run → push (both repos)",
+      "column": "done",
+      "brief": "<p>Michael was away for the first two hours. This card is the same GitHub loop as everyone else, on <strong>both</strong> org repos, before Cloud Run (cards 10–11).</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>A commit from this machine is on hackathon-site <em>and</em> hackathon-api <code>main</code>.</li>\n                  <li>Local site and <code>/health</code> still run.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Pull both remotes.</li>\n                  <li>Tiny visible change in each (or one real increment that happens to touch both).</li>\n                  <li>Run, commit, push <code>origin/main</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html#git\">Git steps</a></div>",
+      "tag": "after 2h away · prove the loop",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "21",
+      "person": "reeve",
+      "hours": 1,
+      "emoji": "🧭",
+      "title": "Reeve: start script for front end and back end together",
+      "column": "done",
+      "brief": "<p><code>start.ps1</code> already lives in the site repo. This card is: a teammate can clone both repos as siblings, run one command, and get site :5500 plus API :8080 without asking anyone.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>From <code>hackathon-site</code>, <code>.\\start.ps1</code> opens two windows.</li>\n                  <li>Site and <code>/health</code> both work. If the venv is missing, the script creates it.</li>\n                  <li>A teammate who is not Reeve can follow the README and succeed.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Keep site and API as sibling folders.</li>\n                  <li>Fix the script if paths, quoting, or venv creation fail on a clean machine.</li>\n                  <li>Document the command in the README (already started).</li>\n                </ol>",
+      "tag": "one command, two processes, no asking the AI",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "27",
+      "person": "connor",
+      "hours": 0.5,
+      "emoji": "⚡",
+      "title": "finished push and pull",
+      "column": "done",
+      "brief": "<p>Practiced git pull and git push against the Tyneside-Software hackathon-site repo.</p>",
+      "tag": "git pull · git push",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "26",
+      "person": "michael",
+      "hours": 2,
+      "emoji": "🏗️",
+      "title": "Site + API deploy on push to main",
+      "column": "done",
+      "brief": "<p>Push to <code>main</code> deploys the static site\n(<a href=\"https://hackathon.tyneside.software\">hackathon.tyneside.software</a>)\nand the API. A normal change does not need a manual Cloud Run click or a Pages republish.</p>\n<h3>Done when</h3>\n<ul>\n  <li>A push to site <code>main</code> updates the live GitHub Pages site.</li>\n  <li>A push to API <code>main</code> updates the live health endpoint.</li>\n  <li>Local <code>.\\start.ps1</code> still works for development.</li>\n</ul>",
+      "tag": "GitHub Pages + Cloud Run",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "10",
+      "person": "michael",
+      "hours": 4,
+      "emoji": "🏗️",
+      "title": "Cloud Run API live + CORS for Pages",
+      "column": "done",
+      "brief": "<p>Deploy <code>hackathon-api</code> to Cloud Run in London (<code>europe-west2</code>), allow unauthenticated <code>/health</code>, and CORS for GitHub Pages plus local <code>:5500</code>. Paste the service URL into <code>config.js</code> as <code>window.HACKATHON_API</code>.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Public Cloud Run URL serves <code>/health</code>.</li>\n                  <li>The site on Pages (and localhost:5500) can call it without a CORS error.</li>\n                  <li>Local uvicorn still works; Cloud Run is extra, not a replacement for the first hours.</li>\n                </ul>\n                <h3>Blocked on</h3>\n                <ul>\n                  <li>Michael back / GCP project access. Do not burn the first two hours on this.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Dockerfile and FastAPI scaffold are already in the API repo.</li>\n                  <li><code>gcloud run deploy hackathon-api --source . --region europe-west2 --allow-unauthenticated</code> with <code>CORS_ORIGINS</code> set.</li>\n                  <li>Point <code>hackathon-site/config.js</code> at the service URL. Include that file from the pages that will call the API.</li>\n                </ol>",
+      "tag": "Cloud Run live",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "12",
+      "person": "lewis",
+      "hours": 0.5,
+      "emoji": "🌱",
+      "title": "Lewis: get the front end running locally",
+      "column": "done",
+      "brief": "<p>Clone the org site repo and prove Home, Map, and Board load on your machine. Do not open HTML as <code>file://</code> — the browser will block the API later.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>http://127.0.0.1:5500/</code> serves the desktop home.</li>\n                  <li>Map and Board open from the nav without a blank page.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-site\">Tyneside-Software/hackathon-site</a> next to <code>hackathon-api</code>.</li>\n                  <li>From the site folder run <code>.\\start.ps1</code> (site + API) or <code>python -m http.server 5500</code> (site only). <code>serve.ps1</code> was removed.</li>\n                  <li>Click through Home, Map, Board.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "clone org repo · serve.ps1 · home + map + board",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "15",
+      "person": "reeve",
+      "hours": 0.5,
+      "emoji": "🧭",
+      "title": "Reeve: get the front end running locally",
+      "column": "done",
+      "brief": "<p>Same front-end onboarding as the others: org clone, local static server, three pages load. Reeve also owns the map slice, so this is the machine the waypoints run on.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>http://127.0.0.1:5500/</code>, <code>/app/</code>, and <code>/board.html</code> all open.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-site\">hackathon-site</a> as a sibling of the API.</li>\n                  <li>Run <code>.\\start.ps1</code> from the site folder (preferred) or <code>python -m http.server 5500</code>.</li>\n                  <li>Do not use <code>file://</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "clone org repo · serve.ps1 · home + map + board",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "16",
+      "person": "reeve",
+      "hours": 1,
+      "emoji": "🧭",
+      "title": "Reeve: get the back end running locally",
+      "column": "done",
+      "brief": "<p>Local FastAPI on :8080. Reeve already scaffolded the health route; this card is “it runs on my machine”, not “write the API”.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>http://127.0.0.1:8080/health</code> returns JSON with <code>ok: true</code>.</li>\n                  <li><code>/docs</code> is reachable.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-api\">hackathon-api</a> next to the site.</li>\n                  <li>Create <code>.venv</code>, install <code>requirements.txt</code>, run uvicorn on 8080 — or use <code>.\\start.ps1</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "clone api · venv · uvicorn · /health",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "13",
+      "person": "lewis",
+      "hours": 1,
+      "emoji": "🌱",
+      "title": "Lewis: get the back end running locally",
+      "column": "todo",
+      "brief": "<p>Clone the API as a sibling of the site and get FastAPI answering on port 8080. This is the health-check loop, not Cloud Run.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>GET http://127.0.0.1:8080/health</code> returns <code>ok</code>.</li>\n                  <li><code>/docs</code> loads the Swagger UI.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-api\">Tyneside-Software/hackathon-api</a> next to the site.</li>\n                  <li><code>python -m venv .venv</code> then <code>pip install -r requirements.txt</code>.</li>\n                  <li><code>uvicorn app.main:app --reload --port 8080</code> (or just <code>.\\start.ps1</code> from the site folder).</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "clone api · venv · uvicorn · /health",
+      "tag_kind": "wait"
+    },
+    {
+      "id": "06",
+      "person": "lewis",
+      "hours": 2,
+      "emoji": "🌱",
+      "title": "Save routes in the browser (localStorage)",
+      "column": "todo",
+      "brief": "<p>Persist the current waypoint list in the browser so a refresh does not wipe a demo. No API. This is the persistence story until card 11.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Add stops, refresh, they come back on the map and in the sidebar.</li>\n                  <li>Clear still clears, including storage.</li>\n                  <li>Home / Board still load if storage is empty or corrupt — never a blank map.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Write waypoints (lat/lng order) to <code>localStorage</code> from <code>app/map.js</code>.</li>\n                  <li>Restore on load, then let the user Calculate route as today.</li>\n                  <li>Do not block on Cloud Run.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"app/\">Open map</a></div>"
+    },
+    {
+      "id": "07",
+      "person": "connor",
+      "hours": 2,
+      "emoji": "⚡",
+      "title": "Job list beside the map (seed Howden-shaped jobs)",
+      "column": "todo",
+      "brief": "<p>A job list in the map sidebar, seeded with Howden-shaped work: named jobs, rough Tyneside locations. This is the first hint of dispatch, not a full scheduler.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>At least five seed jobs visible beside the map without an API.</li>\n                  <li>Clicking a job does something visible (focus the map, highlight, or drop its waypoint).</li>\n                  <li>The existing waypoint + route flow still works if you ignore the list.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Hard-code a small JSON/JS list in the map page (name, area, lat/lng).</li>\n                  <li>Render it in the existing sidebar; keep the layout usable on a laptop.</li>\n                  <li>Shape the names like real cleaning/logistics jobs, not “Test 1”.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"app/\">Open map</a></div>"
+    },
+    {
+      "id": "08",
+      "person": "reeve",
+      "hours": 1.5,
+      "emoji": "🧭",
+      "title": "Demo seed: 5 Tyneside waypoints + named run",
+      "column": "todo",
+      "brief": "<p>One-click demo so nobody has to click the map five times during a show-and-tell. Load a named run with five Tyneside waypoints already placed.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>A button (e.g. “Load Tyneside demo”) drops five named stops and a run name.</li>\n                  <li>Calculate route works immediately on that seed.</li>\n                  <li>Clear still returns to an empty map.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Pick five real-ish spots around Newcastle / Tyneside (not a straight line down one street).</li>\n                  <li>Give the run a name the operator can see in the sidebar.</li>\n                  <li>Keep the manual click-to-add path working.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"app/\">Open map</a></div>"
+    },
+    {
+      "id": "09",
+      "person": "lewis",
+      "hours": 2,
+      "emoji": "🌱",
+      "title": "Local “who am I” account (name in the browser)",
+      "column": "todo",
+      "brief": "<p>No real auth. A display name stored in the browser so the chrome can say who is driving the demo. Later job assignment can reuse it.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>You can set a name from the site (prompt, form, or nav control).</li>\n                  <li>It survives refresh.</li>\n                  <li>It is visible in the chrome (nav or map sidebar). Empty name is a valid empty state, not a crash.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li><code>localStorage</code> for the name. Keep it off the API until card 10.</li>\n                  <li>Show it on more than one page if the chrome is shared; otherwise map + home is enough.</li>\n                </ol>"
+    },
+    {
+      "id": "11",
+      "person": "michael",
+      "hours": 4,
+      "emoji": "🏗️",
+      "title": "Persist routes on the API (replace localStorage)",
+      "column": "todo",
+      "brief": "<p>Replace browser-only route storage with API persistence so two machines can share a run. Card 06 stays as the fallback if the API is down — the map must not go blank.</p>\n<h3>Done when</h3>\n<ul>\n  <li>POST (or PUT) a route, GET it back from the live API.</li>\n  <li>Save on one browser, load on another.</li>\n  <li>If the API errors, localStorage or a visible error keeps the page usable.</li>\n</ul>\n<h3>Blocked on</h3>\n<ul>\n  <li>Noah’s Firestore work (card 31). Cloud Run itself is live.</li>\n</ul>\n<h3>How</h3>\n<ol>\n  <li>Minimal routes resource: id, name, waypoints, maybe duration/distance.</li>\n  <li>Prefer Firestore once Noah’s write/read path works; in-memory only if the card says so.</li>\n  <li>Wire the map save/load to <code>window.HACKATHON_API</code>.</li>\n</ol>",
+      "tag": "after Firestore",
+      "tag_kind": "wait"
+    },
+    {
+      "id": "04",
+      "person": "reeve",
+      "hours": 3,
+      "emoji": "🧭",
+      "title": "Map with clickable / draggable waypoints",
+      "column": "ready",
+      "brief": "<p>Leaflet map centred on Newcastle. Click to drop a stop, drag to move it, remove from the list. This is the visual spine of the night: dispatch starts with a map that never looks dead.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Someone else can add two pins without a briefing.</li>\n                  <li>Drag updates the sidebar coordinates.</li>\n                  <li>Clear removes pins and the route line.</li>\n                </ul>\n                <h3>What’s live</h3>\n                <ul>\n                  <li><code>app/index.html</code> + <code>app/map.js</code> — OSM tiles, draggable markers, stop list with remove.</li>\n                </ul>\n                <div class=\"brief-actions\"><a class=\"btn btn-fill\" href=\"app/\">Open map →</a></div>",
+      "tag": "open app/",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "05",
+      "person": "connor",
+      "hours": 3,
+      "emoji": "⚡",
+      "title": "Route calculation between waypoints",
+      "column": "ready",
+      "brief": "<p>Calculate a driving route through the waypoints. Public OSRM when the network is up; haversine straight-line fallback if it fails, so the board never looks broken.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Two or more stops + Calculate route draws a line.</li>\n                  <li>Sidebar shows distance, time, and engine (<code>OSRM driving</code> or <code>straight-line</code>).</li>\n                  <li>OSRM down still produces a visible line, not an empty map.</li>\n                </ul>\n                <h3>What’s live</h3>\n                <ul>\n                  <li><code>https://router.project-osrm.org</code> for the driving geometry.</li>\n                  <li>Fallback assumes ~35 km/h for a rough time estimate.</li>\n                </ul>\n                <div class=\"brief-actions\"><a class=\"btn btn-fill\" href=\"app/\">Open map →</a></div>",
+      "tag": "OSRM + straight-line fallback",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "01",
+      "person": "lewis",
+      "hours": 0.5,
+      "emoji": "🌱",
+      "title": "Serve the site locally",
+      "column": "done",
+      "brief": "<p>First visible increment: a local static server so nobody opens <code>index.html</code> as <code>file://</code>. <code>serve.ps1</code> did this; it has since been removed in favour of <code>start.ps1</code> (site + API) or <code>python -m http.server 5500</code>.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>http://127.0.0.1:5500/</code> serves Home, Map, and Board.</li>\n                </ul>\n                <h3>What’s live</h3>\n                <ul>\n                  <li>Site is static files. <code>.\\start.ps1</code> is the one-command path.</li>\n                </ul>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "serve.ps1 → :5500",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "02",
+      "person": "reeve",
+      "hours": 1,
+      "emoji": "🧭",
+      "title": "Run the API locally and hit /health",
+      "column": "done",
+      "brief": "<p>FastAPI scaffold so the backend has a real URL on night one. CORS allows localhost:5500 and the GitHub Pages origin. No jobs or route storage yet — that is cards 10–11.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>GET /health</code> returns <code>ok</code> (and now a <code>version</code>, card 25).</li>\n                  <li><code>/docs</code> is available.</li>\n                </ul>\n                <h3>What’s live</h3>\n                <ul>\n                  <li><code>app/main.py</code> — <code>/</code> and <code>/health</code>. Dockerfile ready for Cloud Run.</li>\n                </ul>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "uvicorn :8080",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "03",
+      "person": "lewis",
+      "hours": 2,
+      "emoji": "🌱",
+      "title": "Desktop home in Tyneside style",
+      "column": "done",
+      "brief": "<p>Desktop chrome in the Tyneside / logistics family: sticky nav, amber skin, honest copy. The site should look like a product at every step, not a blank repo.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>index.html</code> has nav, hero, increment panels, and links to Map and Board.</li>\n                  <li>It still looks working if later cards are half-finished.</li>\n                </ul>\n                <h3>What’s live</h3>\n                <ul>\n                  <li>Shared <code>styles.css</code> + <code>logo.svg</code>. Same nav family on Map, Board, Onboarding, Lewis log.</li>\n                </ul>\n                <div class=\"brief-actions\"><a class=\"btn btn-fill\" href=\"index.html\">Open home →</a></div>",
+      "tag": "this site’s index",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "25",
+      "person": "noah",
+      "hours": 0.5,
+      "emoji": "🔧",
+      "title": "Noah: API version on / and /health",
+      "column": "done",
+      "brief": "<p>A <code>VERSION</code> constant so local and Cloud Run responses are identifiable. Root and health both return it. Small, releasable, already on <code>main</code>.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>GET /</code> and <code>GET /health</code> include <code>\"version\": \"0.1.0\"</code> (or whatever the constant is).</li>\n                </ul>\n                <h3>What’s live</h3>\n                <ul>\n                  <li><code>hackathon-api/app/main.py</code> — <code>VERSION = \"0.1.0\"</code> wired into both routes.</li>\n                </ul>",
+      "tag": "VERSION on root + health",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "22",
+      "person": "noah",
+      "hours": 0.5,
+      "emoji": "🔧",
+      "title": "Noah: get the front end running locally",
+      "column": "done",
+      "brief": "<p>Noah is new. Same front-end onboarding as Lewis/Reeve/Connor: org clone, local server, three pages load. Prefer <code>start.ps1</code> so the API is there too. Moved to Done — machine is up.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li>Home, Map, and Board all open at <code>http://127.0.0.1:5500/</code>.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-site\">hackathon-site</a> next to the API.</li>\n                  <li>Run <code>.\\start.ps1</code>.</li>\n                  <li>Do not use <code>file://</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "start.ps1 · home + map + board",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "23",
+      "person": "noah",
+      "hours": 1,
+      "emoji": "🔧",
+      "title": "Noah: get the back end running locally",
+      "column": "done",
+      "brief": "<p>Local FastAPI on :8080. Noah already shipped a version field on the API (card 25); this card is the machine setup so he can keep iterating without Cloud Run. Moved to Done.</p>\n                <h3>Done when</h3>\n                <ul>\n                  <li><code>http://127.0.0.1:8080/health</code> returns <code>ok</code> and a <code>version</code>.</li>\n                </ul>\n                <h3>How</h3>\n                <ol>\n                  <li>Clone <a href=\"https://github.com/Tyneside-Software/hackathon-api\">hackathon-api</a> as a sibling of the site.</li>\n                  <li>venv · <code>pip install -r requirements.txt</code> · uvicorn :8080, or <code>.\\start.ps1</code>.</li>\n                </ol>\n                <div class=\"brief-actions\"><a class=\"btn btn-ghost\" href=\"onboarding.html\">Onboarding steps</a></div>",
+      "tag": "uvicorn · /health",
+      "tag_kind": "ok"
+    },
+    {
+      "id": "35",
+      "person": "michael",
+      "hours": 0.5,
+      "emoji": "🏗️",
+      "title": "Sideload the tracker APK on a physical phone",
+      "column": "todo",
+      "brief": "<p>The tracker is proven on the Pixel 6a emulator (card 32). This card is the same APK on a real phone: USB debugging or sideload <code>app/build/outputs/apk/debug/app-debug.apk</code>, grant location, flip the switch, confirm a new device id on <code>GET /v1/devices</code> and on the map.</p><h3>Done when</h3><ul><li>The debug APK is installed on a physical Android phone.</li><li>Tracking on posts GPS to live Cloud Run.</li><li>The map shows that phone (not only the emulator).</li></ul>",
+      "tag": "physical phone",
+      "tag_kind": "wait"
+    },
+    {
+      "id": "49",
+      "person": "noah",
+      "hours": 2,
+      "emoji": "🔧",
+      "title": "Allow user to login on app",
+      "column": "todo",
+      "brief": "<p>Login on the map/app with the existing API accounts (register/token), not only account.html.</p>",
+      "tag": "app",
+      "tag_kind": "wait"
+    },
+    {
+      "id": "50",
+      "person": "noah",
+      "hours": 2,
+      "emoji": "🔧",
+      "title": "Allow user to set who can view their location",
+      "column": "todo",
+      "brief": "<p>The phone owner chooses who can see their live location (nobody, friends, a group, or everyone on the map).</p>",
+      "tag": "app",
+      "tag_kind": "wait"
+    },
+    {
+      "id": "51",
+      "person": "noah",
+      "hours": 2,
+      "emoji": "🔧",
+      "title": "Allow user to accept group invites and create groups",
+      "column": "todo",
+      "brief": "<p>Create a group, send invites, and accept invites so location sharing can be scoped to a group.</p>",
+      "tag": "app",
+      "tag_kind": "wait"
+    },
+    {
+      "id": "52",
+      "person": "noah",
+      "hours": 2,
+      "emoji": "🔧",
+      "title": "Allow user to choose if their location is public on the map",
+      "column": "todo",
+      "brief": "<p>The phone owner can hide their live location from the public map, or show it. Private by default unless they opt in.</p>",
+      "tag": "app",
+      "tag_kind": "wait"
+    }
+  ]
+}

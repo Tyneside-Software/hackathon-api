@@ -64,6 +64,9 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/v1/devices/{id}` | One phone |
 | GET | `/v1/locations?device_id=` | Ping history (`source`: firestore / datastore / none) |
 | GET | `/v1/buses` | Live buses + 10 min `trails`; bustimes.org only on a stale looking GET |
+| GET | `/v1/board` | Kanban in SQLite. Empty database imports `app/board_seed.json` once |
+| POST | `/v1/board/cards/{id}/move` | Move a card. A move back on the work columns needs `reason`. Backlog does not |
+| GET | `/v1/board/export` | Cards and history, for `update_board.py pull` on the site |
 | POST | `/katie/admin/login` | Katie shop Admin password check → session token |
 | POST | `/katie/admin/verify` | Check a Katie Admin session token |
 

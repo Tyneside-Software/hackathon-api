@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from .config import DATABASE_URL
+from .config import DATABASE_URL, log
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
@@ -76,3 +76,11 @@ def init_db() -> None:
         ShopAdmin.ensure(founder, founder=True)
     except Exception:
         pass
+    try:
+        from .board_store import ensure_board_schema, seed_if_empty
+
+        ensure_board_schema()
+        if seed_if_empty():
+            log.info("Board seeded from app/board_seed.json")
+    except Exception as exc:
+        log.warning("Board seed skipped: %s", exc)

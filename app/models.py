@@ -565,3 +565,54 @@ class ShopProfile(Base):
             {"username": r.username, "photo": r.photo or "", "full_name": r.full_name}
             for r in rows
         ]
+
+
+class BoardPerson(Base):
+    __tablename__ = "board_people"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    emoji: Mapped[str] = mapped_column(String(16), default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class BoardCard(Base):
+    __tablename__ = "board_cards"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    person: Mapped[str] = mapped_column(String(32), index=True, default="")
+    owners: Mapped[str] = mapped_column(Text, default="")
+    hours: Mapped[float] = mapped_column(Float, default=0)
+    hours_known: Mapped[int] = mapped_column(Integer, default=1)
+    emoji: Mapped[str] = mapped_column(String(16), default="")
+    title: Mapped[str] = mapped_column(String(240))
+    column: Mapped[str] = mapped_column(String(16), index=True)
+    tag: Mapped[str] = mapped_column(String(120), default="")
+    tag_kind: Mapped[str] = mapped_column(String(16), default="")
+    brief: Mapped[str] = mapped_column(Text, default="")
+    value: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    commits: Mapped[str] = mapped_column(Text, default="")
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[str] = mapped_column(String(64), default="")
+
+
+class BoardEvent(Base):
+    __tablename__ = "board_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    card_id: Mapped[str] = mapped_column(String(16), index=True)
+    at: Mapped[str] = mapped_column(String(64), default="")
+    by: Mapped[str] = mapped_column(String(32), default="")
+    action: Mapped[str] = mapped_column(String(32), default="")
+    from_column: Mapped[str] = mapped_column(String(16), default="")
+    to_column: Mapped[str] = mapped_column(String(16), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+
+
+class BoardMeta(Base):
+    __tablename__ = "board_meta"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")

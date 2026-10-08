@@ -25,6 +25,7 @@ def root() -> dict:
         "devices": "/v1/devices",
         "me_devices": "/v1/me/devices",
         "buses": "/v1/buses",
+        "board": "/v1/board",
         "version": VERSION,
     }
 

@@ -61,6 +61,15 @@ Install in a venv. Do not commit `.venv`.
 | GET | `/v1/locations?device_id=` | Ping history (`source` firestore or datastore) |
 | GET | `/docs` | Swagger |
 | GET | `/openapi.json` | OpenAPI |
+| GET | `/v1/board` | Kanban from SQLite (people, columns, cards, history) |
+| GET | `/v1/board/export` | Seed shape: people, cards, events |
+| POST | `/v1/board/cards` | Add a card (`by` is a person id) |
+| PATCH | `/v1/board/cards/{id}` | Edit title, brief, person, hours, tag |
+| POST | `/v1/board/cards/{id}/move` | Move column. Backwards needs `reason` |
+| POST | `/v1/board/reorder` | Order of ids inside one column |
+| DELETE | `/v1/board/cards/{id}?by=` | Remove a card |
+
+The board seed is `app/board_seed.json`. Startup imports it only when the database has never held cards. An emptied board is not filled again. `VERSION` is `app/config.py`.
 
 `VERSION` is in `app/main.py` (currently **0.1.5**). CORS methods: `GET`, `POST`, `DELETE`, `OPTIONS`.
 
