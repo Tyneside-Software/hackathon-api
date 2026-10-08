@@ -31,12 +31,16 @@ BUS_UPSTREAM = (
 _raw = os.getenv(
     "CORS_ORIGINS",
     "http://127.0.0.1:5500,http://localhost:5500,"
-    "https://hackathon.tyneside.software,https://tyneside.software,"
-    "https://michaelthomsoncc.github.io",
+    "http://hackathon.tyneside.software,https://hackathon.tyneside.software,"
+    "http://tyneside.software,https://tyneside.software,"
+    "http://michaelthomsoncc.github.io,https://michaelthomsoncc.github.io,"
+    "http://tyneside-software.github.io,https://tyneside-software.github.io",
 )
 origins = [o.strip() for o in _raw.split(",") if o.strip()]
 for extra in (
+    "http://hackathon.tyneside.software",
     "https://hackathon.tyneside.software",
+    "http://tyneside.software",
     "https://tyneside.software",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
