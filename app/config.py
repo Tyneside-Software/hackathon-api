@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 
-VERSION = "0.1.21"
+VERSION = "0.1.22"
 log = logging.getLogger("hackathon-api")
 
 # Live buses: one upstream fetch shared by every map tab. TTL is how long we
@@ -34,7 +34,8 @@ _raw = os.getenv(
     "http://hackathon.tyneside.software,https://hackathon.tyneside.software,"
     "http://tyneside.software,https://tyneside.software,"
     "http://michaelthomsoncc.github.io,https://michaelthomsoncc.github.io,"
-    "http://tyneside-software.github.io,https://tyneside-software.github.io",
+    "http://tyneside-software.github.io,https://tyneside-software.github.io,"
+    "http://100.65.94.5",
 )
 origins = [o.strip() for o in _raw.split(",") if o.strip()]
 for extra in (
@@ -44,6 +45,7 @@ for extra in (
     "https://tyneside.software",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
+    "http://100.65.94.5",
 ):
     if extra not in origins:
         origins.append(extra)

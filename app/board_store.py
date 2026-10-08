@@ -20,21 +20,24 @@ from .models import BoardCard, BoardEvent, BoardMeta, BoardPerson
 
 SEED_PATH = Path(__file__).resolve().parent / "board_seed.json"
 
-COLUMNS = ("backlog", "todo", "doing", "ready", "done")
-# Backlog is a side pile. These four are the ordered board, earliest first.
-ORDERED_COLUMNS = ("todo", "doing", "ready", "done")
+COLUMNS = ("backlog", "todo", "next", "doing", "ready", "done")
+# Backlog is a side pile. These five are the ordered board, earliest first.
+# Same order as the Hermione sprint board: To do, Next, In progress, Ready to deploy, Done.
+ORDERED_COLUMNS = ("todo", "next", "doing", "ready", "done")
 COLUMN_LABELS = {
     "backlog": "Backlog",
     "todo": "To do",
+    "next": "Next",
     "doing": "In progress",
-    "ready": "Ready to demo",
+    "ready": "Ready to deploy",
     "done": "Done",
 }
 COLUMN_EMPTY = {
     "backlog": "Nothing waiting. Add a card, or send one back from the board.",
     "todo": "Nothing here.",
+    "next": "Nothing lined up.",
     "doing": "Empty on purpose. Pull a card and ship it.",
-    "ready": "Nothing ready to demo.",
+    "ready": "Nothing ready to deploy.",
     "done": "Nothing finished yet.",
 }
 DEFAULT_PEOPLE = [

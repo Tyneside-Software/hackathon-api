@@ -94,6 +94,12 @@ class BoardStoreTests(unittest.TestCase):
             move_card(session, "52", column="ready", by="noah")
             with self.assertRaises(BoardError):
                 move_card(session, "52", column="todo", by="noah")
+            lined = move_card(session, "52", column="next", by="noah", reason="Lined up next.")
+            card = next(item for item in lined["cards"] if item["id"] == "52")
+            self.assertEqual(card["column"], "next")
+            with self.assertRaises(BoardError):
+                move_card(session, "52", column="todo", by="noah")
+            move_card(session, "52", column="doing", by="noah")
 
             created = create_card(
                 session,
