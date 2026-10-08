@@ -52,10 +52,12 @@ class BoardStoreTests(unittest.TestCase):
             self.assertTrue(card["events"])
             self.assertEqual(card["events"][0]["by"], "noah")
 
-            with self.assertRaises(BoardError) as raised:
-                move_card(session, "52", column="todo", by="noah")
-            self.assertIn("reason", str(raised.exception).lower())
+            moved_plain = move_card(session, "52", column="todo", by="noah")
+            card = next(item for item in moved_plain["cards"] if item["id"] == "52")
+            self.assertEqual(card["column"], "todo")
+            self.assertEqual(card["events"][0]["reason"], "")
 
+            move_card(session, "52", column="doing", by="noah")
             moved_back = move_card(session, "52", column="todo", by="noah", reason="Not ready.")
             card = next(item for item in moved_back["cards"] if item["id"] == "52")
             self.assertEqual(card["column"], "todo")
@@ -92,13 +94,13 @@ class BoardStoreTests(unittest.TestCase):
             card = next(item for item in parked["cards"] if item["id"] == "52")
             self.assertEqual(card["column"], "backlog")
             move_card(session, "52", column="ready", by="noah")
-            with self.assertRaises(BoardError):
-                move_card(session, "52", column="todo", by="noah")
-            lined = move_card(session, "52", column="next", by="noah", reason="Lined up next.")
+            back = move_card(session, "52", column="todo", by="noah")
+            card = next(item for item in back["cards"] if item["id"] == "52")
+            self.assertEqual(card["column"], "todo")
+            lined = move_card(session, "52", column="next", by="noah")
             card = next(item for item in lined["cards"] if item["id"] == "52")
             self.assertEqual(card["column"], "next")
-            with self.assertRaises(BoardError):
-                move_card(session, "52", column="todo", by="noah")
+            move_card(session, "52", column="todo", by="noah")
             move_card(session, "52", column="doing", by="noah")
 
             created = create_card(

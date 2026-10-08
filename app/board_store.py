@@ -76,8 +76,9 @@ def column_index(column: str) -> int:
 
 
 def move_is_backward(previous: str, column: str) -> bool:
-    """A move to an earlier work column needs a reason.
+    """True when a card moves to an earlier work column.
 
+    Used only to word the history line. A reason is optional.
     Backlog sits beside the board. Moving a card onto it, or back onto the
     board, is not a move backwards.
     """
@@ -736,7 +737,7 @@ def update_card(
                 destination = ""
         if not parts and not destination:
             raise BoardError("Nothing to change.")
-        why = _check_reason(str(fields.get("reason") or ""), required=bool(destination) and move_is_backward(card.column, destination))
+        why = _check_reason(str(fields.get("reason") or ""), required=False)
         if destination:
             previous = card.column
             backward = move_is_backward(previous, destination)
@@ -797,7 +798,7 @@ def move_card(
         if card.column == column:
             return _finish(session, own, board_payload(session))
         backward = move_is_backward(card.column, column)
-        why = _check_reason(reason, required=backward)
+        why = _check_reason(reason, required=False)
         previous = card.column
         card.column = column
         card.rank = _next_rank(session, column)
