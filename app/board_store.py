@@ -21,9 +21,6 @@ from .models import BoardCard, BoardEvent, BoardMeta, BoardPerson
 SEED_PATH = Path(__file__).resolve().parent / "board_seed.json"
 
 COLUMNS = ("backlog", "todo", "next", "doing", "ready", "done")
-# Backlog is a side pile. These five are the ordered board, earliest first.
-# Same order as the Hermione sprint board: To do, Next, In progress, Ready to deploy, Done.
-ORDERED_COLUMNS = ("todo", "next", "doing", "ready", "done")
 COLUMN_LABELS = {
     "backlog": "Backlog",
     "todo": "To do",
@@ -73,23 +70,6 @@ def column_index(column: str) -> int:
         return COLUMNS.index(column)
     except ValueError as exc:
         raise BoardError(f"Column must be one of {', '.join(COLUMNS)}.") from exc
-
-
-def move_is_backward(previous: str, column: str) -> bool:
-    """True when a card moves to an earlier work column.
-
-    Used only to word the history line. A reason is optional.
-    Backlog sits beside the board. Moving a card onto it, or back onto the
-    board, is not a move backwards.
-    """
-    if not previous or not column or previous == column:
-        return False
-    if previous == "backlog" or column == "backlog":
-        return False
-    try:
-        return ORDERED_COLUMNS.index(column) < ORDERED_COLUMNS.index(previous)
-    except ValueError:
-        return column_index(column) < column_index(previous)
 
 
 def norm_id(value: object) -> str:
@@ -220,7 +200,7 @@ def _require_person(session: Session, by: str) -> BoardPerson:
     key = (by or "").strip().lower()
     row = session.get(BoardPerson, key)
     if row is None:
-        raise BoardError("Choose a person on this board (the I am field).")
+        raise BoardError("That person is not on this board.")
     return row
 
 
@@ -241,52 +221,7 @@ def _person_name(session: Session, pid: str) -> str:
     return row.name if row else (pid or "Someone")
 
 
-def _event(
-    session: Session,
-    card: BoardCard,
-    by: str,
-    action: str,
-    detail: str,
-    from_column: str = "",
-    to_column: str = "",
-    reason: str = "",
-) -> None:
-    session.add(
-        BoardEvent(
-            card_id=card.id,
-            at=utc_now(),
-            by=(by or "").strip().lower(),
-            action=action,
-            from_column=from_column,
-            to_column=to_column,
-            reason=(reason or "").strip(),
-            detail=detail,
-        )
-    )
-
-
-def _events_for(session: Session, card_id: str) -> list[dict]:
-    rows = session.scalars(
-        select(BoardEvent).where(BoardEvent.card_id == card_id).order_by(BoardEvent.id.desc())
-    ).all()
-    return [_event_out(row) for row in rows[:40]]
-
-
-def _event_out(row: BoardEvent) -> dict:
-    return {
-        "id": row.id,
-        "card_id": row.card_id,
-        "at": row.at,
-        "by": row.by,
-        "action": row.action,
-        "from_column": row.from_column,
-        "to_column": row.to_column,
-        "reason": row.reason,
-        "detail": row.detail,
-    }
-
-
-def _card_out(session: Session, card: BoardCard, with_events: bool = True) -> dict:
+def _card_out(card: BoardCard) -> dict:
     payload = {
         "id": card.id,
         "person": card.person or "",
@@ -303,8 +238,6 @@ def _card_out(session: Session, card: BoardCard, with_events: bool = True) -> di
         "rank": int(card.rank or 0),
         "updated_at": card.updated_at or "",
     }
-    if with_events:
-        payload["events"] = _events_for(session, card.id)
     return payload
 
 
@@ -327,12 +260,12 @@ def board_payload(session: Session) -> dict:
             for row in _people(session)
         ],
         "columns": _columns_out(),
-        "cards": [_card_out(session, card) for card in cards],
+        "cards": [_card_out(card) for card in cards],
     }
 
 
 def export_state(session: Session | None = None) -> dict:
-    """Shape written back to the git seed. Events are oldest first."""
+    """Shape written back to the git seed. Older event rows are copied so a pull does not drop them. New edits do not add events."""
     session, own = _own_session(session)
     try:
         payload = board_payload(session)
@@ -555,15 +488,6 @@ def _people_label(session: Session, owners: list[str]) -> str:
     return ", ".join(_person_name(session, pid) for pid in owners)
 
 
-def _check_reason(reason: str, *, required: bool) -> str:
-    why = " ".join((reason or "").split())
-    if required and not why:
-        raise BoardError("A move back to an earlier column needs a reason.")
-    if len(why) > 500:
-        raise BoardError("The reason must be 500 characters or fewer.")
-    return why
-
-
 def _normalise_commit(repo: str, sha: str, summary: str = "") -> dict:
     name = (repo or "").strip()
     digest = (sha or "").strip().lower()
@@ -595,7 +519,7 @@ def create_card(
     session: Session | None,
     *,
     title: str,
-    by: str,
+    by: str = "",
     person: str = "",
     hours: float | None = None,
     column: str = "todo",
@@ -609,7 +533,6 @@ def create_card(
 ) -> dict:
     session, own = _own_session(session)
     try:
-        actor = _require_person(session, by)
         column_index(column)
         names = _clean_owners(session, owners, person if owners is None else None)
         text = _clean_title(title)
@@ -649,15 +572,6 @@ def create_card(
         )
         _store_owners(session, card, names)
         session.add(card)
-        session.flush()
-        _event(
-            session,
-            card,
-            actor.id,
-            "add",
-            f"Added to {COLUMN_LABELS[column]}.",
-            to_column=column,
-        )
         return _finish(session, own, board_payload(session))
     except Exception:
         session.rollback()
@@ -670,13 +584,12 @@ def update_card(
     session: Session | None,
     card_id: str,
     *,
-    by: str,
+    by: str = "",
     fields: dict,
 ) -> dict:
     """Apply the keys the caller actually sent. ``hours: null`` clears the estimate."""
     session, own = _own_session(session)
     try:
-        actor = _require_person(session, by)
         card = _find_card(session, card_id)
         parts: list[str] = []
         if "title" in fields:
@@ -730,43 +643,12 @@ def update_card(
                 destination = ""
         if not parts and not destination:
             raise BoardError("Nothing to change.")
-        why = _check_reason(str(fields.get("reason") or ""), required=False)
         if destination:
-            previous = card.column
-            backward = move_is_backward(previous, destination)
             card.column = destination
             card.rank = _next_rank(session, destination)
             if destination == "done" and card.tag and not card.tag_kind:
                 card.tag_kind = "ok"
-            verb = "Moved back" if backward else "Moved"
-            detail = f"{verb} from {COLUMN_LABELS[previous]} to {COLUMN_LABELS[destination]}."
-            if parts:
-                detail += " Edited " + "; ".join(parts) + "."
-            card.updated_at = utc_now()
-            _event(
-                session,
-                card,
-                actor.id,
-                "move" if not parts else "edit",
-                detail,
-                from_column=previous,
-                to_column=destination,
-                reason=why,
-            )
-        else:
-            only_people = len(parts) == 1 and parts[0].startswith("assignees ")
-            card.updated_at = utc_now()
-            if only_people:
-                detail = parts[0][:1].upper() + parts[0][1:] + "."
-            else:
-                detail = "Edited " + "; ".join(parts) + "."
-            _event(
-                session,
-                card,
-                actor.id,
-                "assignees" if only_people else "edit",
-                detail,
-            )
+        card.updated_at = utc_now()
         return _finish(session, own, board_payload(session))
     except Exception:
         session.rollback()
@@ -780,35 +662,20 @@ def move_card(
     card_id: str,
     *,
     column: str,
-    by: str,
+    by: str = "",
     reason: str = "",
 ) -> dict:
     session, own = _own_session(session)
     try:
-        actor = _require_person(session, by)
         card = _find_card(session, card_id)
         column_index(column)
         if card.column == column:
             return _finish(session, own, board_payload(session))
-        backward = move_is_backward(card.column, column)
-        why = _check_reason(reason, required=False)
-        previous = card.column
         card.column = column
         card.rank = _next_rank(session, column)
         card.updated_at = utc_now()
         if column == "done" and card.tag and not card.tag_kind:
             card.tag_kind = "ok"
-        verb = "Moved back" if backward else "Moved"
-        _event(
-            session,
-            card,
-            actor.id,
-            "move",
-            f"{verb} from {COLUMN_LABELS[previous]} to {COLUMN_LABELS[column]}.",
-            from_column=previous,
-            to_column=column,
-            reason=why,
-        )
         return _finish(session, own, board_payload(session))
     except Exception:
         session.rollback()
@@ -822,11 +689,10 @@ def reorder_cards(
     *,
     column: str,
     ids: list[str],
-    by: str,
+    by: str = "",
 ) -> dict:
     session, own = _own_session(session)
     try:
-        _require_person(session, by)
         column_index(column)
         rows = list(session.scalars(select(BoardCard).where(BoardCard.column == column)).all())
         have = {row.id for row in rows}
@@ -854,10 +720,9 @@ def reorder_cards(
         raise
 
 
-def duplicate_card(session: Session | None, card_id: str, *, by: str) -> dict:
+def duplicate_card(session: Session | None, card_id: str, *, by: str = "") -> dict:
     session, own = _own_session(session)
     try:
-        actor = _require_person(session, by)
         source = _find_card(session, card_id)
         now = utc_now()
         title = source.title
@@ -882,8 +747,6 @@ def duplicate_card(session: Session | None, card_id: str, *, by: str) -> dict:
             updated_at=now,
         )
         session.add(card)
-        session.flush()
-        _event(session, card, actor.id, "duplicate", f"Copied from {source.id}.")
         return _finish(session, own, board_payload(session))
     except Exception:
         session.rollback()
@@ -892,10 +755,9 @@ def duplicate_card(session: Session | None, card_id: str, *, by: str) -> dict:
         raise
 
 
-def delete_card(session: Session | None, card_id: str, *, by: str) -> dict:
+def delete_card(session: Session | None, card_id: str, *, by: str = "") -> dict:
     session, own = _own_session(session)
     try:
-        _require_person(session, by)
         card = _find_card(session, card_id)
         for event in session.scalars(select(BoardEvent).where(BoardEvent.card_id == card.id)).all():
             session.delete(event)

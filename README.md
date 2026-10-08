@@ -66,7 +66,7 @@ uvicorn app.main:app --reload --port 8080
 | GET | `/v1/buses` | Live buses + 10 min `trails`; bustimes.org only on a stale looking GET |
 | GET | `/v1/board` | Kanban in SQLite. Empty database imports `app/board_seed.json` once |
 | POST | `/v1/board/cards/{id}/move` | Move a card. `reason` is optional, including a move back |
-| GET | `/v1/board/export` | Cards and history, for `update_board.py pull` on the site |
+| GET | `/v1/board/export` | Cards for `update_board.py pull` on the site. Older event rows are included so a pull does not drop them. New edits do not add events. |
 | POST | `/katie/admin/login` | Katie shop Admin password check → session token |
 | POST | `/katie/admin/verify` | Check a Katie Admin session token |
 

@@ -27,7 +27,7 @@ class CommitIn(BaseModel):
 
 class CardIn(BaseModel):
     title: str
-    by: str
+    by: str = ""
     person: str = ""
     owners: list[str] | None = None
     hours: float | None = None
@@ -41,7 +41,7 @@ class CardIn(BaseModel):
 
 
 class CardPatch(BaseModel):
-    by: str
+    by: str = ""
     title: str | None = None
     person: str | None = None
     owners: list[str] | None = None
@@ -56,18 +56,18 @@ class CardPatch(BaseModel):
 
 class MoveIn(BaseModel):
     column: str
-    by: str
+    by: str = ""
     reason: str = ""
 
 
 class ReorderIn(BaseModel):
     column: str
     ids: list[str] = Field(default_factory=list)
-    by: str
+    by: str = ""
 
 
 class ActorIn(BaseModel):
-    by: str
+    by: str = ""
 
 
 def _call(fn, *args, **kwargs):
@@ -99,8 +99,8 @@ def add_card(body: CardIn) -> dict:
 @router.patch("/cards/{card_id}")
 def patch_card(card_id: str, body: CardPatch) -> dict:
     data = body.model_dump(exclude_unset=True)
-    actor = data.pop("by")
-    return _call(update_card, None, card_id, by=actor, fields=data)
+    data.pop("by", None)
+    return _call(update_card, None, card_id, by="", fields=data)
 
 
 @router.post("/cards/{card_id}/move")
@@ -119,5 +119,5 @@ def duplicate(card_id: str, body: ActorIn) -> dict:
 
 
 @router.delete("/cards/{card_id}")
-def remove_card(card_id: str, by: str) -> dict:
+def remove_card(card_id: str, by: str = "") -> dict:
     return _call(delete_card, None, card_id, by=by)

@@ -43,22 +43,19 @@ class BoardStoreTests(unittest.TestCase):
             self.assertFalse(seed_if_empty(session))
             self.assertEqual(session.scalar(select(func.count()).select_from(BoardCard)), first)
 
-            moved = move_card(session, "52", column="doing", by="noah")
+            moved = move_card(session, "52", column="doing", by="")
             card = next(item for item in moved["cards"] if item["id"] == "52")
             self.assertEqual(card["column"], "doing")
-            self.assertTrue(card["events"])
-            self.assertEqual(card["events"][0]["by"], "noah")
+            self.assertNotIn("events", card)
 
-            moved_plain = move_card(session, "52", column="todo", by="noah")
+            moved_plain = move_card(session, "52", column="todo")
             card = next(item for item in moved_plain["cards"] if item["id"] == "52")
             self.assertEqual(card["column"], "todo")
-            self.assertEqual(card["events"][0]["reason"], "")
 
             move_card(session, "52", column="doing", by="noah")
             moved_back = move_card(session, "52", column="todo", by="noah", reason="Not ready.")
             card = next(item for item in moved_back["cards"] if item["id"] == "52")
             self.assertEqual(card["column"], "todo")
-            self.assertEqual(card["events"][0]["reason"], "Not ready.")
 
             created = create_card(
                 session,
@@ -125,8 +122,7 @@ class BoardStoreTests(unittest.TestCase):
             self.assertEqual(card["owners"], ["noah"])
             self.assertEqual(card["person"], "noah")
             self.assertEqual(card["value"], 2)
-            self.assertEqual(card["events"][0]["action"], "edit")
-            self.assertIn("assignees", card["events"][0]["detail"])
+            self.assertNotIn("events", card)
 
 
 if __name__ == "__main__":
