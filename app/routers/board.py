@@ -6,14 +6,12 @@ from pydantic import BaseModel, Field
 
 from ..board_store import (
     BoardError,
-    add_commit,
     create_card,
     delete_card,
     duplicate_card,
     export_state,
     get_board,
     move_card,
-    remove_commit,
     reorder_cards,
     update_card,
 )
@@ -72,13 +70,6 @@ class ActorIn(BaseModel):
     by: str
 
 
-class CommitAdd(BaseModel):
-    by: str
-    repo: str
-    sha: str
-    summary: str = ""
-
-
 def _call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
@@ -130,13 +121,3 @@ def duplicate(card_id: str, body: ActorIn) -> dict:
 @router.delete("/cards/{card_id}")
 def remove_card(card_id: str, by: str) -> dict:
     return _call(delete_card, None, card_id, by=by)
-
-
-@router.post("/cards/{card_id}/commits")
-def record_commit(card_id: str, body: CommitAdd) -> dict:
-    return _call(add_commit, None, card_id, **body.model_dump())
-
-
-@router.delete("/cards/{card_id}/commits")
-def drop_commit(card_id: str, by: str, repo: str, sha: str) -> dict:
-    return _call(remove_commit, None, card_id, by=by, repo=repo, sha=sha)

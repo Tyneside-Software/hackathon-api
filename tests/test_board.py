@@ -12,12 +12,9 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.board_store import (
-    BoardError,
-    add_commit,
     create_card,
     export_state,
     move_card,
-    remove_commit,
     seed_if_empty,
     update_card,
 )
@@ -86,7 +83,7 @@ class BoardStoreTests(unittest.TestCase):
             self.assertEqual(exported["cards"], [])
             self.assertTrue(exported["people"])
 
-    def test_side_pile_assignees_value_estimate_and_commits(self) -> None:
+    def test_side_pile_assignees_value_and_estimate(self) -> None:
         with self.Session() as session:
             self.assertTrue(seed_if_empty(session))
             move_card(session, "52", column="doing", by="noah")
@@ -130,22 +127,6 @@ class BoardStoreTests(unittest.TestCase):
             self.assertEqual(card["value"], 2)
             self.assertEqual(card["events"][0]["action"], "edit")
             self.assertIn("assignees", card["events"][0]["detail"])
-
-            recorded = add_commit(
-                session,
-                card["id"],
-                by="noah",
-                repo="hackathon-site",
-                sha="abc1234",
-                summary="Show the board",
-            )
-            card = next(item for item in recorded["cards"] if item["id"] == card["id"])
-            self.assertEqual(card["commits"][0]["sha"], "abc1234")
-            with self.assertRaises(BoardError):
-                add_commit(session, card["id"], by="noah", repo="hackathon-site", sha="ABC1234")
-            cleared = remove_commit(session, card["id"], by="noah", repo="hackathon-site", sha="abc1234")
-            card = next(item for item in cleared["cards"] if item["id"] == card["id"])
-            self.assertEqual(card["commits"], [])
 
 
 if __name__ == "__main__":

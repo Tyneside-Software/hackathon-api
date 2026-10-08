@@ -577,13 +577,6 @@ def _normalise_commit(repo: str, sha: str, summary: str = "") -> dict:
     return {"repo": name, "sha": digest, "summary": line}
 
 
-def _commit_label(change: dict) -> str:
-    label = f"{change['repo']}@{change['sha'][:7]}"
-    if change.get("summary"):
-        label += f" ({change['summary']})"
-    return label
-
-
 def _clean_tag(tag: str, kind: str) -> tuple[str, str]:
     text = (tag or "").strip()
     if len(text) > 120:
@@ -907,70 +900,6 @@ def delete_card(session: Session | None, card_id: str, *, by: str) -> dict:
         for event in session.scalars(select(BoardEvent).where(BoardEvent.card_id == card.id)).all():
             session.delete(event)
         session.delete(card)
-        return _finish(session, own, board_payload(session))
-    except Exception:
-        session.rollback()
-        if own:
-            session.close()
-        raise
-
-
-def add_commit(
-    session: Session | None,
-    card_id: str,
-    *,
-    by: str,
-    repo: str,
-    sha: str,
-    summary: str = "",
-) -> dict:
-    session, own = _own_session(session)
-    try:
-        actor = _require_person(session, by)
-        card = _find_card(session, card_id)
-        change = _normalise_commit(repo, sha, summary)
-        current = _commits_of(card)
-        if any(item["repo"] == change["repo"] and item["sha"] == change["sha"] for item in current):
-            raise BoardError("That commit is already on this card.")
-        current.append(change)
-        card.commits = json.dumps(current)
-        card.updated_at = utc_now()
-        _event(session, card, actor.id, "commit", f"Recorded commit {_commit_label(change)}.")
-        return _finish(session, own, board_payload(session))
-    except Exception:
-        session.rollback()
-        if own:
-            session.close()
-        raise
-
-
-def remove_commit(
-    session: Session | None,
-    card_id: str,
-    *,
-    by: str,
-    repo: str,
-    sha: str,
-) -> dict:
-    session, own = _own_session(session)
-    try:
-        actor = _require_person(session, by)
-        card = _find_card(session, card_id)
-        change = _normalise_commit(repo, sha)
-        current = _commits_of(card)
-        kept = [
-            item for item in current
-            if not (item["repo"] == change["repo"] and item["sha"] == change["sha"])
-        ]
-        if len(kept) == len(current):
-            raise BoardError("That commit is not on this card.")
-        removed = next(
-            item for item in current
-            if item["repo"] == change["repo"] and item["sha"] == change["sha"]
-        )
-        card.commits = json.dumps(kept) if kept else ""
-        card.updated_at = utc_now()
-        _event(session, card, actor.id, "commit", f"Removed commit {_commit_label(removed)}.")
         return _finish(session, own, board_payload(session))
     except Exception:
         session.rollback()
