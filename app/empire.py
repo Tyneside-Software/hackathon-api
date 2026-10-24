@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .database import SessionLocal, normalise_username
-from .models import EmpireCar, EmpireGame
+from .models import EmpireCar, EmpireGame, EmpirePerson
 
 log = logging.getLogger("hackathon-api")
 
@@ -518,6 +518,45 @@ def airport_ends(username: str) -> tuple[tuple[float, float], tuple[float, float
     return place_point(AIRPORT_NAME), place_point(drops[index % len(drops)])
 
 
+def hour_pickup(username: str, now: float) -> tuple[float, float]:
+    """The place where a person waits. Not a ring around the depot."""
+    if is_morning(now):
+        pickup, _drop = morning_ends(username)
+    elif is_day(now):
+        pickup, _drop = day_ends(username)
+    elif is_evening(now):
+        pickup, _drop = evening_ends(username)
+    elif is_night(now):
+        pickup, _drop = night_ends(username)
+    else:
+        pickup, _drop = journey_ends(username)
+    return pickup
+
+
+def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
+    """One person waits with no taxi. A later tick does not add another."""
+    waiting = session.scalar(
+        select(EmpirePerson).where(
+            EmpirePerson.username == game.username,
+            EmpirePerson.sign == "",
+        )
+    )
+    if waiting is not None:
+        return
+    pickup = hour_pickup(game.username, now)
+    if not inside_circle(pickup):
+        return
+    session.add(
+        EmpirePerson(
+            username=game.username,
+            name=NAMES[game.name_index % len(NAMES)],
+            lat=pickup[0],
+            lng=pickup[1],
+            sign="",
+        )
+    )
+
+
 def _quiet_release(now: float) -> float:
     """Even cars wait out the quiet night and leave at 01:00 Europe/London."""
     hour, minute = london_clock(now)
@@ -623,6 +662,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
     try:
         games = list(session.scalars(select(EmpireGame)).all())
         for game in games:
+            _ensure_waiting_person(game, session, now)
             for car in _cars(session, game.username):
                 try:
                     advance_car(car, game, now)
@@ -785,6 +825,17 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                         "sign": car.sign,
                     }
                 )
+        people = [
+            {
+                "name": person.name,
+                "lat": person.lat,
+                "lng": person.lng,
+                "sign": person.sign,
+            }
+            for person in session.scalars(
+                select(EmpirePerson).where(EmpirePerson.username == username).order_by(EmpirePerson.id)
+            ).all()
+        ]
         miles = sum(driven_miles(car, now) for car in cars)
         lines = money_lines(len(cars), miles=miles)
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
@@ -797,6 +848,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "osrm_unavailable": unavailable,
             "cars": payload_cars,
             "fares": fares,
+            "people": people,
             "fare_in": lines["fare_in"],
             "cash_pence": cash_pence,
             "driver_share": lines["driver_share"],

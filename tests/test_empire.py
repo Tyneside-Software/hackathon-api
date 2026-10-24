@@ -59,7 +59,8 @@ class EmpireTableTests(unittest.TestCase):
         names = set(insp.get_table_names())
         self.assertIn("empire_games", names)
         self.assertIn("empire_cars", names)
-        for table in ("empire_games", "empire_cars"):
+        self.assertIn("empire_people", names)
+        for table in ("empire_games", "empire_cars", "empire_people"):
             columns = {col["name"] for col in insp.get_columns(table)}
             self.assertNotIn("device_id", columns)
         device_columns = {col["name"] for col in insp.get_columns("devices")}
@@ -1624,6 +1625,7 @@ class EmpireFleetTests(unittest.TestCase):
                 "osrm_unavailable",
                 "cars",
                 "fares",
+                "people",
                 "fare_in",
                 "driver_share",
                 "fuel",
@@ -2174,6 +2176,87 @@ class EmpireFleetTests(unittest.TestCase):
                 self.assertLess(moving, 10, label)
             else:
                 self.assertEqual(moving, 10, label)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_person_waits_inside_the_circle_with_no_taxi(self) -> None:
+        places = {(lat, lng) for _name, lat, lng in empire.PLACES}
+        morning = datetime(2023, 11, 15, 8, 0, tzinfo=timezone.utc).timestamp()
+        evening = datetime(2023, 11, 15, 17, 0, tzinfo=timezone.utc).timestamp()
+        quiet = datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp()
+        hours = (
+            (NOW, empire.night_ends),
+            (DAY, empire.day_ends),
+            (morning, empire.morning_ends),
+            (evening, empire.evening_ends),
+            (quiet, empire.journey_ends),
+        )
+
+        def opened(stamp: float, account: str):
+            engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+            Base.metadata.create_all(engine)
+            Session = sessionmaker(bind=engine, expire_on_commit=False)
+            return engine, Session, account, stamp
+
+        for stamp, ends in hours:
+            _engine, Session, account, stamp = opened(stamp, "waitperson")
+            with Session() as session:
+                empire.ensure_game(account, stamp, session)
+                before = list(session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all())
+                self.assertEqual({car.sign for car in before}, {f"T{number}" for number in range(1, 11)})
+                empire.tick_all(stamp + 1, session)
+                body = empire.snapshot(account, stamp + 1, session)
+                people = body["people"]
+                self.assertEqual(len(people), 1, stamp)
+                person = people[0]
+                pickup, _drop = ends(account)
+                point = (person["lat"], person["lng"])
+                self.assertEqual(person["sign"], "", stamp)
+                self.assertIn(person["name"], empire.NAMES, person["name"])
+                self.assertEqual(point, pickup, stamp)
+                self.assertIn(point, places, stamp)
+                self.assertNotEqual(point, empire.BERWICK, stamp)
+                self.assertNotIn(point, _ring(account), stamp)
+                self.assertTrue(empire.inside_circle(point), stamp)
+                self.assertGreater(empire.haversine_km(point, empire.BERWICK), 40, stamp)
+                self.assertEqual([car["sign"] for car in body["cars"]], [f"T{number}" for number in range(1, 11)])
+                self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
+                self.assertTrue(all(fare["sign"] for fare in body["fares"]))
+                self.assertEqual(body["fare_in"], 0)
+                self.assertEqual(body["new_car"], 800000)
+                moving = next(car for car in body["cars"] if car["sign"] == "T1")
+                self.assertEqual(moving["status"], "to_passenger", stamp)
+                stored = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+                ).one()
+                started = stored.leg_started
+                route = stored.route_json
+                self.assertGreater(len(route), 2, stamp)
+                empire.tick_all(stamp + 2, session)
+                again = empire.snapshot(account, stamp + 2, session)
+                self.assertEqual(len(again["people"]), 1)
+                self.assertEqual(again["people"][0]["sign"], "")
+                self.assertEqual((again["people"][0]["lat"], again["people"][0]["lng"]), point)
+                self.assertEqual([car["sign"] for car in again["cars"]], [f"T{number}" for number in range(1, 11)])
+                stayed = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+                ).one()
+                self.assertEqual(stayed.leg_started, started)
+                self.assertEqual(stayed.route_json, route)
+        _engine, Session, _account, stamp = opened(NOW, "waitperson")
+        with Session() as session:
+            empire.ensure_game("waitperson", NOW, session)
+            empire.ensure_game("waitother", NOW, session)
+            empire.tick_all(NOW + 1, session)
+            one = empire.snapshot("waitperson", NOW + 1, session)
+            other = empire.snapshot("waitother", NOW + 1, session)
+            self.assertEqual(len(one["people"]), 1)
+            self.assertEqual(len(other["people"]), 1)
+            self.assertEqual(one["people"][0]["sign"], "")
+            self.assertEqual(other["people"][0]["sign"], "")
+            self.assertEqual((one["people"][0]["lat"], one["people"][0]["lng"]), empire.night_ends("waitperson")[0])
+            self.assertEqual((other["people"][0]["lat"], other["people"][0]["lng"]), empire.night_ends("waitother")[0])
+            self.assertEqual([car["sign"] for car in one["cars"]], [f"T{number}" for number in range(1, 11)])
+            self.assertEqual([car["sign"] for car in other["cars"]], [f"T{number}" for number in range(1, 11)])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
