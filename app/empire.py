@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import math
+import random
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -412,6 +413,31 @@ NIGHT_PICKUPS = (
     "Whitley Bay",
 )
 AIRPORT_NAME = "Newcastle Airport"
+# Relative weights for places people live. Not a new town, and not a new hour.
+HOME_WEIGHTS = {
+    "Killingworth": 5,
+    "Forest Hall": 4,
+    "Benton": 4,
+    "Shiremoor": 3,
+    "West Monkseaton": 3,
+    "Backworth": 2,
+    "Earsdon": 2,
+}
+HOSPITALS = (
+    "North Tyneside General at Rake Lane",
+    "the RVI",
+    "the Freeman",
+)
+# One table for every kind of journey. Weights are morning, day, evening, night, and the small hours.
+# A zero weight means that kind is not drawn in that band. 800000 is not a weight.
+JOURNEY_KINDS = (
+    ("commute", HOMES, MORNING_DROPS, (8, 2, 6, 0, 1)),
+    ("night out", NIGHT_PICKUPS, HOMES, (0, 1, 4, 8, 1)),
+    ("hospital", HOMES, HOSPITALS, (2, 3, 2, 2, 3)),
+    ("airport", (AIRPORT_NAME,), TOWN + COAST, (2, 2, 2, 3, 2)),
+    ("coast", HOMES, COAST, (1, 5, 5, 1, 1)),
+    ("short hop", HOMES, HOMES, (3, 4, 3, 2, 2)),
+)
 
 
 def place_point(name: str) -> tuple[float, float]:
@@ -564,21 +590,117 @@ def busy_spot(username: str, now: float) -> tuple[float, float]:
     return busy
 
 
+def _band_index(now: float) -> int:
+    """0 morning, 1 day, 2 evening, 3 night, 4 the small hours. No new hour band."""
+    if is_morning(now):
+        return 0
+    if is_day(now):
+        return 1
+    if is_evening(now):
+        return 2
+    if is_night(now):
+        return 3
+    return 4
+
+
+def _engine_seed(username: str, key: str) -> int:
+    total = 0
+    for ch in f"{normalise_username(username)}|{key}":
+        total = (total * 33 + ord(ch)) & 0xFFFFFFFF
+    return total
+
+
+def _spell_key(now: float) -> str:
+    utc = datetime.fromtimestamp(now, tz=timezone.utc)
+    local = utc + timedelta(hours=_london_offset_hours(utc))
+    return f"{local.date().isoformat()}|{_band_index(now)}"
+
+
+def spell_target(username: str, now: float) -> int:
+    """How many people this spell draws.
+
+    A quiet spell can be zero. A morning or evening spell is busier than the ten taxis.
+    """
+    band = _band_index(now)
+    if band == 3:
+        return 1
+    rng = random.Random(_engine_seed(username, _spell_key(now) + "|target"))
+    if band == 0:
+        return 11 + rng.randrange(0, 4)
+    if band == 1:
+        return 1 + rng.randrange(0, 3)
+    if band == 2:
+        return 11 + rng.randrange(0, 3)
+    return rng.choices((0, 1), weights=(3, 1))[0]
+
+
+def _pick_name(rng: random.Random, names: tuple[str, ...]) -> str:
+    weights = [HOME_WEIGHTS.get(name, 1) for name in names]
+    return rng.choices(list(names), weights=weights, k=1)[0]
+
+
+def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float, float], tuple[float, float]]:
+    """Draw one journey. The hour changes the weights, not the function."""
+    rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|{salt}|journey"))
+    band = _band_index(now)
+    weights = [kind[3][band] for kind in JOURNEY_KINDS]
+    if sum(weights) <= 0:
+        weights = [1] * len(JOURNEY_KINDS)
+    kind_name, pickups, drops, _weights = rng.choices(list(JOURNEY_KINDS), weights=weights, k=1)[0]
+    pickup_name = _pick_name(rng, pickups)
+    drop_name = _pick_name(rng, drops)
+    for _ in range(8):
+        if drop_name != pickup_name:
+            break
+        drop_name = _pick_name(rng, drops)
+    if drop_name == pickup_name:
+        for name in drops:
+            if name != pickup_name:
+                drop_name = name
+                break
+    if kind_name == "commute" and band == 2:
+        pickup_name, drop_name = drop_name, pickup_name
+    return kind_name, place_point(pickup_name), place_point(drop_name)
+
+
+def engine_idle_spot(username: str, now: float, person: EmpirePerson | None = None) -> tuple[float, float]:
+    """Where an idle taxi goes. One draw for the fleet until each car draws for itself."""
+    if person is not None and (person.lat or person.lng):
+        spot = (float(person.lat), float(person.lng))
+        if inside_circle(spot):
+            return spot
+    _kind, pickup, _drop = draw_journey(username, now, "idle")
+    return pickup
+
+
+def _people(session: Session, username: str) -> list[EmpirePerson]:
+    return list(
+        session.scalars(
+            select(EmpirePerson).where(EmpirePerson.username == username).order_by(EmpirePerson.id)
+        ).all()
+    )
+
+
 def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
-    """One person waits with no taxi. A later tick does not add another."""
-    waiting = session.scalar(select(EmpirePerson).where(EmpirePerson.username == game.username))
-    if waiting is not None:
+    """Draw the next person, or nobody when the spell is quiet.
+
+    A busy spell may draw more people than there are free taxis. That does not add a car.
+    """
+    people = _people(session, game.username)
+    if len(people) >= spell_target(game.username, now):
         return
-    pickup = hour_pickup(game.username, now)
-    if not inside_circle(pickup):
+    _kind, pickup, drop = draw_journey(game.username, now, f"person-{len(people)}")
+    if not inside_circle(pickup) or not inside_circle(drop) or pickup == drop:
         return
     session.add(
         EmpirePerson(
             username=game.username,
-            name=NAMES[game.name_index % len(NAMES)],
+            name=NAMES[len(people) % len(NAMES)],
             lat=pickup[0],
             lng=pickup[1],
             sign="",
+            drop_lat=drop[0],
+            drop_lng=drop[1],
         )
     )
 
@@ -589,10 +711,12 @@ def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
     A car already on a leg keeps the route and leg_started it already has.
     """
     person = session.scalar(
-        select(EmpirePerson).where(
+        select(EmpirePerson)
+        .where(
             EmpirePerson.username == game.username,
             EmpirePerson.sign == "",
         )
+        .order_by(EmpirePerson.id)
     )
     if person is None:
         return
@@ -707,12 +831,16 @@ def _allocated_person(car: EmpireCar) -> EmpirePerson | None:
 
 
 def _start_arrived_trip(car: EmpireCar, game: EmpireGame, now: float) -> None:
-    """The allocated taxi has arrived. Run the existing passenger trip.
+    """The allocated taxi has arrived. Run the journey drawn for that person.
 
     800000 is not a fare. fare_in is unchanged.
     """
-    pickup, drop = hour_ends(car.username, now)
     person = _allocated_person(car)
+    if person is not None and (person.drop_lat or person.drop_lng):
+        pickup = (float(person.lat), float(person.lng))
+        drop = (float(person.drop_lat), float(person.drop_lng))
+    else:
+        pickup, drop = hour_ends(car.username, now)
     if person is not None and person.name:
         name = person.name
     else:
@@ -801,7 +929,8 @@ def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> 
     No passenger and no fare. A car already on a leg keeps its route.
     The quiet hold means the stagger has elapsed and this car was not given a fare.
     """
-    spot = busy_spot(game.username, now)
+    people = _people(session, game.username)
+    spot = engine_idle_spot(game.username, now, people[0] if people else None)
     if not inside_circle(spot):
         return
     for car in _cars(session, game.username):

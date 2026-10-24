@@ -63,6 +63,23 @@ def ensure_empire_cash_column(bind=None) -> None:
         conn.execute(text("ALTER TABLE empire_games ADD COLUMN cash_pence INTEGER NOT NULL DEFAULT 0"))
 
 
+def ensure_empire_person_drop_columns(bind=None) -> None:
+    """Add the drawn drop to an existing empire_people table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_people" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_people")}
+    missing = [name for name in ("drop_lat", "drop_lng") if name not in cols]
+    if not missing:
+        return
+    with target.begin() as conn:
+        for name in missing:
+            conn.execute(text(f"ALTER TABLE empire_people ADD COLUMN {name} FLOAT NOT NULL DEFAULT 0"))
+
+
 def ensure_empire_job_column(bind=None) -> None:
     """Add job to an existing empire_cars table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -99,6 +116,7 @@ def init_db() -> None:
                     conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
         ensure_empire_cash_column(engine)
         ensure_empire_job_column(engine)
+        ensure_empire_person_drop_columns(engine)
     except Exception:
         pass
     try:
