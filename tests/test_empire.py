@@ -346,6 +346,23 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertNotIn("T11", bee_signs)
         self.assertEqual(len(bee_stored), 10)
 
+    def test_bought_car_starts_at_the_shiremoor_depot(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            added = empire.buy_car("ada", 800000, NOW, session)
+            body = empire.snapshot("ada", NOW, session)
+            stored = session.scalar(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11"))
+        car = next(item for item in body["cars"] if item["sign"] == "T11")
+        self.assertEqual(added, "T11")
+        self.assertEqual(empire.DEPOT, (55.0367, -1.5075))
+        self.assertEqual(car["status"], "at_depot")
+        self.assertAlmostEqual(car["lat"], 55.0367, places=4)
+        self.assertAlmostEqual(car["lng"], -1.5075, places=4)
+        self.assertIsNotNone(stored)
+        self.assertAlmostEqual(stored.lat, 55.0367, places=4)
+        self.assertAlmostEqual(stored.lng, -1.5075, places=4)
+        self.assertEqual(stored.status, "at_depot")
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
