@@ -664,9 +664,26 @@ def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float
     return kind_name, place_point(pickup_name), place_point(drop_name)
 
 
-def strategic_spot(username: str, sign: str, now: float) -> tuple[float, float]:
-    """A waiting spot for one unclaimed taxi. Not another taxi's passenger."""
-    _kind, pickup, _drop = draw_journey(username, now, f"wait-{sign}")
+def strategic_spot(
+    username: str,
+    sign: str,
+    now: float,
+    taken: tuple[tuple[float, float], ...] = (),
+) -> tuple[float, float]:
+    """One taxi's own waiting spot. Another taxi's spot is left alone.
+
+    The first draw is seeded as wait-{sign}. A taken spot uses the next seeded draw,
+    so a test can replay which place this taxi got.
+    """
+    blocked = {(round(point[0], 5), round(point[1], 5)) for point in taken}
+    pickup = DEPOT
+    for attempt in range(16):
+        salt = f"wait-{sign}" if attempt == 0 else f"wait-{sign}-{attempt}"
+        _kind, pickup, _drop = draw_journey(username, now, salt)
+        if not inside_circle(pickup):
+            continue
+        if (round(pickup[0], 5), round(pickup[1], 5)) not in blocked:
+            return pickup
     return pickup
 
 
@@ -988,13 +1005,21 @@ def _collect_claimed(car: EmpireCar, game: EmpireGame, person: EmpirePerson, now
 def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> None:
     """Claimed taxis collect their own person. Everyone else hunts or takes a break.
 
-    Other taxis do not drive to that person. A car already on a leg keeps it.
+    Each idle taxi draws its own spot, so the cars do not stack and do not share one path.
+    A car that is collecting, carrying, or returning keeps that leg.
     The depot is for a break. 800000 is not a fare.
     """
     people = _people(session, game.username)
     claimed = {person.sign: person for person in people if person.sign}
     cars = _cars(session, game.username)
     free = sum(1 for car in cars if car.status == "at_depot" and car_may_depart(car))
+    taken: list[tuple[float, float]] = [(float(person.lat), float(person.lng)) for person in people]
+    for car in cars:
+        if car.status == "at_depot":
+            continue
+        route = _loads(car.route_json, [])
+        if len(route) >= 2:
+            taken.append((float(route[-1][0]), float(route[-1][1])))
     for car in cars:
         try:
             if _fault is not None and _fault(car):
@@ -1022,9 +1047,10 @@ def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> 
                     _sit_on_break(car, now, depot)
                 _store_job(car)
                 continue
-            spot = strategic_spot(game.username, car.sign, now)
+            spot = strategic_spot(game.username, car.sign, now, tuple(taken))
             if not inside_circle(spot) or haversine_km(start, spot) <= 0.05:
                 continue
+            taken.append(spot)
             car.passenger = ""
             car.fare_name = ""
             car.fare_lat = 0.0
