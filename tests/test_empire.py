@@ -479,6 +479,44 @@ class EmpireFleetTests(unittest.TestCase):
     def test_username_shifts_the_pickup(self) -> None:
         self.test_two_feeds_do_not_share_fare_coordinates()
 
+    def test_username_shifts_the_ten_car_bearing(self) -> None:
+        left = right = None
+        for index in range(80):
+            one_name = f"bear{index}a"
+            other_name = f"bear{index}b"
+            if empire.trip_bearing(one_name) != empire.trip_bearing(other_name):
+                left, right = one_name, other_name
+                break
+        self.assertIsNotNone(left)
+        self.assertGreaterEqual(empire.trip_bearing(left), 160)
+        self.assertLessEqual(empire.trip_bearing(left), 300)
+        self.assertGreaterEqual(empire.trip_bearing(right), 160)
+        self.assertLessEqual(empire.trip_bearing(right), 300)
+        with self.Session() as session:
+            empire.ensure_game(left, NOW, session)
+            empire.ensure_game(right, NOW, session)
+            empire.tick_all(NOW + 64, session)
+            one = empire.snapshot(left, NOW + 64, session)
+            other = empire.snapshot(right, NOW + 64, session)
+            left_cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == left)).all())
+            right_cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == right)).all())
+        expected_left = empire.destination(empire.DEPOT, empire.trip_bearing(left), empire.PICKUP_MILES)
+        expected_right = empire.destination(empire.DEPOT, empire.trip_bearing(right), empire.PICKUP_MILES)
+        self.assertEqual(len(left_cars), 10)
+        self.assertEqual(len(right_cars), 10)
+        self.assertEqual(len(one["fares"]), 10)
+        self.assertEqual(len(other["fares"]), 10)
+        for car in left_cars:
+            self.assertAlmostEqual(car.fare_lat, expected_left[0], places=4)
+            self.assertAlmostEqual(car.fare_lng, expected_left[1], places=4)
+        for car in right_cars:
+            self.assertAlmostEqual(car.fare_lat, expected_right[0], places=4)
+            self.assertAlmostEqual(car.fare_lng, expected_right[1], places=4)
+        self.assertNotEqual((round(expected_left[0], 5), round(expected_left[1], 5)), (round(expected_right[0], 5), round(expected_right[1], 5)))
+        other_points = {(round(fare["lat"], 5), round(fare["lng"], 5)) for fare in other["fares"]}
+        for fare in one["fares"]:
+            self.assertNotIn((round(fare["lat"], 5), round(fare["lng"], 5)), other_points)
+
     def test_names_cycle(self) -> None:
         def quick(start, end):
             return {"points": [[start[0], start[1]], [end[0], end[1]]], "duration_s": 1}
