@@ -1561,6 +1561,8 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
         if existing is not None:
             if existing.depart_offset < 0:
                 existing.depart_offset = 0
+                existing.leg_started = now
+                existing.hold_until = now + DEPOT_PAUSE_S
                 game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
                 session.commit()
             return "T11"
@@ -1581,7 +1583,7 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
                 osrm=False,
                 trail_json="[]",
                 fare_name="",
-                hold_until=now,
+                hold_until=now + DEPOT_PAUSE_S,
                 next_check=now + CHECK_S,
                 depart_offset=0,
             )
