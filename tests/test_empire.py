@@ -2960,6 +2960,29 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(len(session.scalars(select(EmpireCar).where(EmpireCar.username == "legstart")).all()), 10)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_the_feed_names_the_place_at_the_end_of_the_leg(self) -> None:
+        names = {name for name, _lat, _lng in empire.PLACES}
+        self.assertEqual(empire.place_name(empire.place_point("Benton")), "Benton")
+        self.assertEqual(empire.place_name(empire.DEPOT), "Shiremoor")
+        self.assertEqual(empire.place_name((0.0, 0.0)), "")
+        account = "legplace"
+        with self.Session() as session:
+            empire.ensure_game(account, NOW, session)
+            empire.tick_all(NOW + 1, session)
+            body = empire.snapshot(account, NOW + 1, session)
+        home = self._car(body, "T2")
+        moving = self._car(body, "T1")
+        self.assertEqual(home["status"], "at_depot")
+        self.assertEqual(home["destination"], "Shiremoor")
+        end = (moving["route"][-1][0], moving["route"][-1][1])
+        self.assertEqual(moving["destination"], empire.place_name(end))
+        self.assertIn(moving["destination"], names)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(body["new_car"], 800000)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
         live = ROOT / "hackathon.db"
         before = live.stat().st_mtime if live.exists() else None
