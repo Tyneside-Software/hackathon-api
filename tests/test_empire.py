@@ -342,6 +342,31 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(empire.NEW_CAR_PENCE, 800000)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_purchase_body_with_no_pence_adds_no_car(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "nopence", "password": "password1"}).status_code, 201)
+            token = client.post("/login", json={"username": "nopence", "password": "password1"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            missing = client.post("/v1/empire/buy", headers=headers, json={})
+            after_missing = client.get("/v1/empire", headers=headers).json()
+            bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
+            after = client.get("/v1/empire", headers=headers).json()
+        missing_signs = [car["sign"] for car in after_missing["cars"]]
+        signs = [car["sign"] for car in after["cars"]]
+        self.assertGreaterEqual(missing.status_code, 400)
+        self.assertEqual(missing_signs, [f"T{index}" for index in range(1, 11)])
+        self.assertNotIn("T11", missing_signs)
+        self.assertGreaterEqual(bought.status_code, 200)
+        self.assertLess(bought.status_code, 300)
+        self.assertEqual(bought.json()["sign"], "T11")
+        self.assertEqual(signs[:10], [f"T{index}" for index in range(1, 11)])
+        self.assertIn("T11", signs)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_company_figure_minus_1120_stays_off_the_ten_car_feed(self) -> None:
         from fastapi.testclient import TestClient
 
