@@ -178,6 +178,21 @@ def ensure_empire_person_arrived_column(bind=None) -> None:
         conn.execute(text("ALTER TABLE empire_people ADD COLUMN arrived FLOAT NOT NULL DEFAULT 0"))
 
 
+def ensure_empire_car_journey_column(bind=None) -> None:
+    """Add the carried journey kind to an existing empire_cars table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_cars" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_cars")}
+    if "journey" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_cars ADD COLUMN journey VARCHAR(32) NOT NULL DEFAULT ''"))
+
+
 def ensure_empire_job_column(bind=None) -> None:
     """Add job to an existing empire_cars table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -240,6 +255,7 @@ def init_db() -> None:
         ensure_empire_loiter_columns(engine)
         ensure_empire_bookings_column(engine)
         ensure_empire_job_column(engine)
+        ensure_empire_car_journey_column(engine)
         ensure_empire_firm_columns(engine)
         ensure_empire_person_drop_columns(engine)
         ensure_empire_person_arrived_column(engine)

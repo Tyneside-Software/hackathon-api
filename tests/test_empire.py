@@ -453,6 +453,35 @@ class EmpireTableTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_car_journey_column_is_added_without_wiping_the_car(self) -> None:
+        from app.database import ensure_empire_car_journey_column
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_cars ("
+                    "id INTEGER PRIMARY KEY, username VARCHAR(64), sign VARCHAR(8), "
+                    "status VARCHAR(32))"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO empire_cars (username, sign, status) VALUES ('ada', 'T1', 'at_depot')")
+            )
+        ensure_empire_car_journey_column(engine)
+        ensure_empire_car_journey_column(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_cars")}
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT username, sign, status, journey FROM empire_cars")).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_cars")).scalar()
+        self.assertIn("journey", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.sign, "T1")
+        self.assertEqual(row.status, "at_depot")
+        self.assertEqual(row.journey, "")
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
 
 class EmpireRegisterTests(unittest.TestCase):
     def test_register_creates_three_cars_at_the_depot(self) -> None:
@@ -3547,6 +3576,39 @@ class EmpireFleetTests(unittest.TestCase):
                 self.assertIn(kind, kinds)
             body = empire.snapshot(name, morning, session)
             self.assertEqual([item["journey"] for item in body["people"]], [person.journey for person in rows])
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_carrying_car_sends_the_journey_after_the_person_leaves(self) -> None:
+        morning = datetime(2023, 11, 15, 8, 0, tzinfo=timezone.utc).timestamp()
+        with self.Session() as session:
+            game = empire.ensure_game("carrykind", morning, session)
+            car = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "carrykind", EmpireCar.sign == "T1")
+            ).one()
+            session.add(
+                empire.EmpirePerson(
+                    username="carrykind",
+                    name="Mina",
+                    lat=55.01,
+                    lng=-1.50,
+                    sign="T1",
+                    drop_lat=55.02,
+                    drop_lng=-1.49,
+                    arrived=morning,
+                    journey="commute",
+                )
+            )
+            session.flush()
+            car.route_json = json.dumps([[55.01, -1.50], [55.01, -1.50]])
+            empire._start_arrived_trip(car, game, morning)
+            session.commit()
+            body = empire.snapshot("carrykind", morning, session)
+            t1 = next(row for row in body["cars"] if row["sign"] == "T1")
+            t2 = next(row for row in body["cars"] if row["sign"] == "T2")
+            self.assertEqual(t1["status"], "with_passenger")
+            self.assertEqual(t1["journey"], "commute")
+            self.assertEqual(t2["journey"], "")
+            self.assertFalse(any(person["name"] == "Mina" for person in body["people"]))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_the_feed_names_the_place_at_the_end_of_the_leg(self) -> None:
