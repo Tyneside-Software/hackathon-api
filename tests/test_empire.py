@@ -138,6 +138,23 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertNotIn(16500, [ada["fare_in"], ada["driver_share"], ada["fuel"], ada["standing"], ada["new_car"]])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_ten_car_feed_names_check_s_and_trail_s(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "clockten", "password": "password1"}).status_code, 201)
+            token = client.post("/login", json={"username": "clockten", "password": "password1"}).json()["access_token"]
+            body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual([car["sign"] for car in body["cars"]], [f"T{index}" for index in range(1, 11)])
+        self.assertEqual(body["check_s"], 10)
+        self.assertEqual(body["trail_s"], 600)
+        self.assertIs(type(body["check_s"]), int)
+        self.assertIs(type(body["trail_s"]), int)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
 
 class EmpireFleetTests(unittest.TestCase):
     def setUp(self) -> None:
