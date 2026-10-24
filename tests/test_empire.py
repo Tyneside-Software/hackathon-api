@@ -171,6 +171,26 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertLess(body["server_now"], 2_000_000_000)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_ten_car_feed_grows_by_the_bought_car(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "bought1", "password": "password1"}).status_code, 201)
+            token = client.post("/login", json={"username": "bought1", "password": "password1"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            before = client.get("/v1/empire", headers=headers).json()
+            with SessionLocal() as session:
+                added = empire.buy_car("bought1", 800000, session=session)
+            after = client.get("/v1/empire", headers=headers).json()
+        self.assertEqual([car["sign"] for car in before["cars"]], [f"T{index}" for index in range(1, 11)])
+        self.assertEqual(added, "T11")
+        self.assertEqual([car["sign"] for car in after["cars"]], [f"T{index}" for index in range(1, 12)])
+        self.assertEqual(before["new_car"], 800000)
+        self.assertEqual(after["new_car"], 800000)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_company_figure_minus_1120_stays_off_the_ten_car_feed(self) -> None:
         from fastapi.testclient import TestClient
 
