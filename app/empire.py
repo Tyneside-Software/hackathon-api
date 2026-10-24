@@ -35,6 +35,7 @@ NEW_CAR_PENCE = 800000
 CHECK_S = 10
 TRAIL_S = 600
 DEPOT_PAUSE_S = 4
+BREAK_S = 180
 STAGGER_S = 7
 PICKUP_MILES = 1.2
 DROP_MILES = 3.0
@@ -61,7 +62,7 @@ CARS = tuple(
 )
 OPENING_SIGNS = frozenset(sign for sign, _colour, _offset in CARS)
 STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning", "to_better_spot")
-JOBS = ("waiting", "travelling to a better spot", "collecting", "carrying", "returning")
+JOBS = ("waiting", "travelling to a better spot", "collecting", "carrying", "returning", "on break")
 BERWICK = (55.7692, -2.0084)
 # Published positions. Reading this table does not call the network.
 PLACES = (
@@ -344,11 +345,11 @@ def _next_name(game: EmpireGame) -> str:
 
 
 def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tuple[float, float], now: float, status: str) -> None:
+    """Start the leg where the car already is. Do not snap the start back to Shiremoor."""
     route, duration, osrm = build_route(start, end)
-    if status in ("to_passenger", "to_better_spot"):
-        if not route:
-            route = [[DEPOT[0], DEPOT[1]]]
-        route[0] = [DEPOT[0], DEPOT[1]]
+    if not route:
+        route = [[start[0], start[1]], [end[0], end[1]]]
+    route[0] = [float(start[0]), float(start[1])]
     car.status = status
     car.route_json = json.dumps(route)
     car.duration_s = max(float(duration), 0.001)
@@ -673,6 +674,83 @@ def engine_idle_spot(username: str, now: float, person: EmpirePerson | None = No
     return pickup
 
 
+def car_depot(car: EmpireCar) -> tuple[float, float]:
+    """Opening cars use Shiremoor. A later firm passes its own depot into the same rules."""
+    return DEPOT
+
+
+def car_position(car: EmpireCar, depot: tuple[float, float] | None = None) -> tuple[float, float]:
+    """Where this car is now. A leg starts here."""
+    home = car_depot(car) if depot is None else depot
+    route = _loads(car.route_json, [])
+    if route and car.status == "at_depot":
+        end = (float(route[-1][0]), float(route[-1][1]))
+        if haversine_km(end, home) > 0.05:
+            return end
+    if car.lat or car.lng:
+        return (float(car.lat), float(car.lng))
+    return home
+
+
+def depot_takes_pickup(
+    pickup: tuple[float, float],
+    depots: tuple[tuple[float, float], ...],
+    username: str,
+    salt: str,
+) -> tuple[float, float]:
+    """A nearer depot is more likely to take the pickup. Distance is the territory."""
+    rng = random.Random(_engine_seed(username, f"{salt}|depot"))
+    weights = [1.0 / max(haversine_km(depot, pickup), 0.05) for depot in depots]
+    return rng.choices(list(depots), weights=weights, k=1)[0]
+
+
+def car_takes_a_break(username: str, sign: str, now: float, waiting: int, free: int) -> bool:
+    """Likely when few people are waiting beside the free taxis, unlikely when they outnumber them.
+
+    The same seed replays the choice. A later tick can draw again.
+    """
+    bucket = int(now) // BREAK_S
+    rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|{sign}|{bucket}|break"))
+    if waiting > free:
+        return rng.random() < 0.12
+    return rng.random() < 0.88
+
+
+def _even_idle(car: EmpireCar) -> bool:
+    return not airport_sign(car.sign) and int(car.sign[1:]) % 2 == 0
+
+
+def _should_break(car: EmpireCar, now: float) -> bool:
+    if not _even_idle(car) or not is_night(now):
+        return False
+    session = object_session(car)
+    if session is None:
+        return car_takes_a_break(car.username, car.sign, now, 0, 1)
+    people = _people(session, car.username)
+    if any(person.sign == car.sign for person in people):
+        return False
+    free = sum(1 for other in _cars(session, car.username) if other.status == "at_depot" and car_may_depart(other))
+    return car_takes_a_break(car.username, car.sign, now, len(people), free)
+
+
+def _sit_on_break(car: EmpireCar, now: float, depot: tuple[float, float]) -> None:
+    """Sit at this car's own depot for a few minutes. Status stays at_depot."""
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+    car.status = "at_depot"
+    car.lat, car.lng = depot
+    car.route_json = json.dumps([[depot[0], depot[1]], [depot[0], depot[1]]])
+    car.duration_s = 0.0
+    car.leg_started = now
+    car.hold_until = now + BREAK_S
+    car.osrm = True
+    car.job = "on break"
+
+
 def _people(session: Session, username: str) -> list[EmpirePerson]:
     return list(
         session.scalars(
@@ -732,23 +810,6 @@ def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
         return
 
 
-def _quiet_release(now: float) -> float:
-    """Even cars wait out the quiet night and leave at 01:00 Europe/London."""
-    hour, minute = london_clock(now)
-    minutes = hour * 60 + minute
-    if minutes < 60:
-        wait = 60 - minutes
-    else:
-        wait = 24 * 60 + 60 - minutes
-    return now + wait * 60
-
-
-def _parked_for_quiet(car: EmpireCar, now: float) -> bool:
-    if airport_sign(car.sign) or int(car.sign[1:]) % 2 == 1:
-        return False
-    return is_night(now)
-
-
 def _waiting_away_from_depot(car: EmpireCar) -> bool:
     """True when an idle car is already at a place that is not the depot."""
     route = _loads(car.route_json, [])
@@ -776,7 +837,7 @@ def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
     car.fare_name = name
     car.fare_lat, car.fare_lng = pickup
     car.drop_lat, car.drop_lng = drop
-    _begin(car, game, DEPOT, pickup, now, "to_passenger")
+    _begin(car, game, car_position(car), pickup, now, "to_passenger")
 
 
 def _finish_empty_move(car: EmpireCar, now: float) -> None:
@@ -795,10 +856,7 @@ def _finish_empty_move(car: EmpireCar, now: float) -> None:
     car.duration_s = 0.0
     car.leg_started = now
     car.osrm = True
-    if _parked_for_quiet(car, now):
-        car.hold_until = _quiet_release(now)
-    else:
-        car.hold_until = now + DEPOT_PAUSE_S
+    car.hold_until = now + DEPOT_PAUSE_S
 
 
 def current_job(car: EmpireCar) -> str:
@@ -811,6 +869,8 @@ def current_job(car: EmpireCar) -> str:
         return "carrying"
     if car.status == "returning":
         return "returning"
+    if car.status == "at_depot" and float(car.hold_until) - float(car.leg_started) >= BREAK_S - 1:
+        return "on break"
     return "waiting"
 
 
@@ -873,15 +933,21 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         _begin(car, game, start, DEPOT, now, "returning")
         return
     if car.status == "returning":
+        route = _loads(car.route_json, [])
+        home = (float(route[-1][0]), float(route[-1][1])) if route else car_depot(car)
         car.status = "at_depot"
         car.passenger = ""
         car.fare_name = ""
-        car.lat, car.lng = DEPOT
-        car.route_json = json.dumps([list(DEPOT), list(DEPOT)])
+        car.lat, car.lng = home
+        car.route_json = json.dumps([[home[0], home[1]], [home[0], home[1]]])
         car.duration_s = 0
         car.leg_started = now
         car.osrm = True
-        car.hold_until = now + DEPOT_PAUSE_S
+        if _should_break(car, now):
+            car.hold_until = now + BREAK_S
+            car.job = "on break"
+        else:
+            car.hold_until = now + DEPOT_PAUSE_S
 
 
 def _check_in(car: EmpireCar, now: float) -> None:
@@ -899,15 +965,15 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
         raise RuntimeError("empire car fault")
     for _ in range(48):
         if car.status == "at_depot":
+            home = car_depot(car)
             if _waiting_away_from_depot(car):
                 route = _loads(car.route_json, [])
                 car.lat, car.lng = float(route[-1][0]), float(route[-1][1])
             else:
-                car.lat, car.lng = DEPOT
+                car.lat, car.lng = home
             if now < car.hold_until or not car_may_depart(car):
                 break
-            if _parked_for_quiet(car, now) and _parked_for_quiet(car, car.hold_until):
-                car.hold_until = _quiet_release(now)
+            if _even_idle(car) and is_night(now):
                 break
             _start_fare(car, game, car.hold_until)
             continue
@@ -924,21 +990,44 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
 
 
 def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> None:
-    """Idle cars drive toward where this hour is busy.
+    """An idle night car hunts, or returns to its own depot and takes a break.
 
-    No passenger and no fare. A car already on a leg keeps its route.
-    The quiet hold means the stagger has elapsed and this car was not given a fare.
+    The old hold until 01:00 is not this choice. A car already on a leg keeps it.
+    No passenger and no fare. 800000 is not a fare.
     """
+    if not is_night(now):
+        return
     people = _people(session, game.username)
     spot = engine_idle_spot(game.username, now, people[0] if people else None)
     if not inside_circle(spot):
         return
-    for car in _cars(session, game.username):
-        if car.status != "at_depot" or not car_may_depart(car):
+    allocated = {person.sign for person in people if person.sign}
+    cars = _cars(session, game.username)
+    free = sum(1 for car in cars if car.status == "at_depot" and car_may_depart(car))
+    for car in cars:
+        if car.status != "at_depot" or not car_may_depart(car) or not _even_idle(car):
             continue
-        if not _parked_for_quiet(car, now) or _waiting_away_from_depot(car):
+        if now < float(car.hold_until):
             continue
-        if abs(float(car.hold_until) - _quiet_release(now)) > 1.0:
+        depot = car_depot(car)
+        start = car_position(car, depot)
+        takes_break = car.sign not in allocated and car_takes_a_break(
+            game.username, car.sign, now, len(people), free
+        )
+        if takes_break:
+            if haversine_km(start, depot) > 0.05:
+                car.passenger = ""
+                car.fare_name = ""
+                car.fare_lat = 0.0
+                car.fare_lng = 0.0
+                car.drop_lat = 0.0
+                car.drop_lng = 0.0
+                _begin(car, game, start, depot, now, "returning")
+            else:
+                _sit_on_break(car, now, depot)
+            _store_job(car)
+            continue
+        if haversine_km(start, spot) <= 0.05:
             continue
         car.passenger = ""
         car.fare_name = ""
@@ -946,7 +1035,7 @@ def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> 
         car.fare_lng = 0.0
         car.drop_lat = 0.0
         car.drop_lng = 0.0
-        _begin(car, game, DEPOT, spot, now, "to_better_spot")
+        _begin(car, game, start, spot, now, "to_better_spot")
         _store_job(car)
 
 
