@@ -299,7 +299,9 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
     try:
         game = session.get(EmpireGame, username)
         if game is None:
-            game = EmpireGame(username=username, created_at=str(int(now)), name_index=0, cash_pence=0)
+            game = EmpireGame(
+                username=username, created_at=str(int(now)), name_index=0, cash_pence=0, fare_in=0
+            )
             session.add(game)
             for sign, colour, offset in CARS:
                 session.add(
@@ -1195,6 +1197,8 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         _collected_person_leaves(car)
         return
     if car.status == "with_passenger":
+        if not (car.firm or ""):
+            game.fare_in = int(game.fare_in or 0) + completed_trip_tariff(car)
         route = _loads(car.route_json, [])
         if route:
             start = (float(route[-1][0]), float(route[-1][1]))
@@ -1551,6 +1555,96 @@ def driven_miles(car: EmpireCar, now: float) -> float:
     return route_miles(route) * fraction
 
 
+# Tariff one, 11 November 2024. Lengths and times are tenths.
+# The flag and the further unit are pence. Distance or waiting time finishes a unit, not both.
+TARIFF_ONE_UNIT_YARDS = 1613
+TARIFF_ONE_UNIT_SECONDS = 468
+TARIFF_ONE_FLAG_PENCE = 240
+TARIFF_ONE_FURTHER_PENCE = 25
+YARDS_PER_MILE = 1760
+
+
+def _tariff_units(yards: int, seconds: int, unit_yards: int, unit_seconds: int) -> int:
+    units = 0
+    into_yards = 0
+    into_seconds = 0
+    guard = 0
+    while yards > 0 or seconds > 0:
+        guard += 1
+        if guard > 100000:
+            break
+        need_yards = unit_yards - into_yards
+        need_seconds = unit_seconds - into_seconds
+        if need_yards <= 0 or need_seconds <= 0:
+            units += 1
+            into_yards = 0
+            into_seconds = 0
+            continue
+        if seconds == 0:
+            if yards >= need_yards:
+                yards -= need_yards
+                units += 1
+                into_yards = 0
+                into_seconds = 0
+            else:
+                into_yards += yards
+                yards = 0
+            continue
+        if yards == 0:
+            if seconds >= need_seconds:
+                seconds -= need_seconds
+                units += 1
+                into_yards = 0
+                into_seconds = 0
+            else:
+                into_seconds += seconds
+                seconds = 0
+            continue
+        distance_first = yards >= need_yards and seconds * need_yards <= need_seconds * yards
+        time_first = seconds >= need_seconds and yards * need_seconds < need_yards * seconds
+        if distance_first:
+            yards_left = yards - need_yards
+            seconds = seconds * yards_left // yards
+            yards = yards_left
+            units += 1
+            into_yards = 0
+            into_seconds = 0
+        elif time_first:
+            seconds_left = seconds - need_seconds
+            yards = yards * seconds_left // seconds
+            seconds = seconds_left
+            units += 1
+            into_yards = 0
+            into_seconds = 0
+        else:
+            into_yards += yards
+            into_seconds += seconds
+            yards = 0
+            seconds = 0
+    if into_yards > 0 or into_seconds > 0:
+        units += 1
+    return units
+
+
+def north_tyneside_tariff_pence(miles: float, seconds: float) -> int:
+    """Tariff one for one hiring. One mile is 490. Three miles are 1040."""
+    yards = int(round(float(miles) * YARDS_PER_MILE * 10))
+    ticks = int(round(max(0.0, float(seconds)) * 10))
+    if yards < 0:
+        yards = 0
+    units = _tariff_units(yards, ticks, TARIFF_ONE_UNIT_YARDS, TARIFF_ONE_UNIT_SECONDS)
+    if units == 0:
+        return 0
+    return TARIFF_ONE_FLAG_PENCE + (units - 1) * TARIFF_ONE_FURTHER_PENCE
+
+
+def completed_trip_tariff(car: EmpireCar) -> int:
+    """Pence for the with_passenger route that just finished. 800000 is not a fare."""
+    route = _loads(car.route_json, [])
+    miles = route_miles(route) if len(route) >= 2 else 0.0
+    return north_tyneside_tariff_pence(miles, float(car.duration_s))
+
+
 def money_lines(car_count: int, fare_in: int = 0, miles: float = 0.0) -> dict[str, int]:
     """In-game money for one account. Integer pence. No company totals."""
     fare = int(fare_in)
@@ -1650,7 +1744,8 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                 }
             )
         miles = sum(driven_miles(car, now) for car in cars)
-        lines = money_lines(len(cars), miles=miles)
+        fare_in = 0 if game is None else int(game.fare_in or 0)
+        lines = money_lines(len(cars), fare_in=fare_in, miles=miles)
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
         firms = []
         for firm in FIRM_NAMES:
