@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1684,6 +1685,60 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual({car["status"] for car in mixed["cars"]}, set(allowed))
         for car in mixed["cars"]:
             self.assertIn(car["status"], allowed)
+
+    def test_place_table_names_real_positions_inside_the_circle(self) -> None:
+        expected = (
+            "Shiremoor",
+            "Backworth",
+            "Earsdon",
+            "West Monkseaton",
+            "Forest Hall",
+            "Killingworth",
+            "Benton",
+            "Cobalt",
+            "Silverlink",
+            "Royal Quays",
+            "Regent Centre",
+            "Four Lane Ends",
+            "Whitley Bay",
+            "Spanish City",
+            "Cullercoats",
+            "Tynemouth",
+            "North Shields",
+            "Grey's Monument",
+            "Central Station",
+            "Haymarket",
+            "the Quayside",
+            "Osborne Road",
+            "North Tyneside General at Rake Lane",
+            "the RVI",
+            "the Freeman",
+            "Newcastle Airport",
+        )
+        calls = []
+
+        def trap(*_args, **_kwargs):
+            calls.append(True)
+            raise AssertionError("network")
+
+        original = urllib.request.urlopen
+        urllib.request.urlopen = trap
+        try:
+            places = tuple(empire.PLACES)
+        finally:
+            urllib.request.urlopen = original
+        self.assertEqual(calls, [])
+        self.assertEqual(tuple(name for name, _lat, _lng in places), expected)
+        self.assertEqual(len(places), len(set(expected)))
+        points = {(lat, lng) for _name, lat, lng in places}
+        self.assertEqual(len(points), len(places))
+        self.assertNotIn(empire.BERWICK, points)
+        for name, lat, lng in places:
+            point = (lat, lng)
+            self.assertTrue(empire.inside_circle(point), name)
+            self.assertGreater(empire.haversine_km(point, empire.BERWICK), 40, name)
+            self.assertNotIn("Berwick", name)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
         live = ROOT / "hackathon.db"
