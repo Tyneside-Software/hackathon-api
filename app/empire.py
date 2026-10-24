@@ -533,6 +533,21 @@ def hour_pickup(username: str, now: float) -> tuple[float, float]:
     return pickup
 
 
+def busy_spot(username: str, now: float) -> tuple[float, float]:
+    """Where this hour is busy. A real place, not a ring around the depot."""
+    if is_morning(now):
+        _home, busy = morning_ends(username)
+    elif is_day(now):
+        busy, _other = day_ends(username)
+    elif is_evening(now):
+        _work, busy = evening_ends(username)
+    elif is_night(now):
+        busy, _home = night_ends(username)
+    else:
+        busy, _other = journey_ends(username)
+    return busy
+
+
 def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
     """One person waits with no taxi. A later tick does not add another."""
     waiting = session.scalar(select(EmpirePerson).where(EmpirePerson.username == game.username))
@@ -594,6 +609,15 @@ def _parked_for_quiet(car: EmpireCar, now: float) -> bool:
     return is_night(now)
 
 
+def _waiting_away_from_depot(car: EmpireCar) -> bool:
+    """True when an idle car is already at a place that is not the depot."""
+    route = _loads(car.route_json, [])
+    if not route:
+        return False
+    end = (float(route[-1][0]), float(route[-1][1]))
+    return haversine_km(end, DEPOT) > 0.05
+
+
 def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
     if airport_sign(car.sign):
         pickup, drop = airport_ends(car.username)
@@ -615,7 +639,32 @@ def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
     _begin(car, game, DEPOT, pickup, now, "to_passenger")
 
 
+def _finish_empty_move(car: EmpireCar, now: float) -> None:
+    """The car has reached the better spot. That arrival is not a fare."""
+    route = _loads(car.route_json, [])
+    end = (float(route[-1][0]), float(route[-1][1])) if route else DEPOT
+    car.lat, car.lng = end
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+    car.status = "at_depot"
+    car.route_json = json.dumps([[end[0], end[1]], [end[0], end[1]]])
+    car.duration_s = 0.0
+    car.leg_started = now
+    car.osrm = True
+    if _parked_for_quiet(car, now):
+        car.hold_until = _quiet_release(now)
+    else:
+        car.hold_until = now + DEPOT_PAUSE_S
+
+
 def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
+    if car.status == "to_passenger" and not car.passenger and not car.fare_name:
+        _finish_empty_move(car, now)
+        return
     if car.status == "to_passenger":
         start = (car.fare_lat, car.fare_lng)
         end = (car.drop_lat, car.drop_lng)
@@ -654,7 +703,11 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
         raise RuntimeError("empire car fault")
     for _ in range(48):
         if car.status == "at_depot":
-            car.lat, car.lng = DEPOT
+            if _waiting_away_from_depot(car):
+                route = _loads(car.route_json, [])
+                car.lat, car.lng = float(route[-1][0]), float(route[-1][1])
+            else:
+                car.lat, car.lng = DEPOT
             if now < car.hold_until or not car_may_depart(car):
                 break
             if _parked_for_quiet(car, now) and _parked_for_quiet(car, car.hold_until):
@@ -673,6 +726,31 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
     _check_in(car, now)
 
 
+def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> None:
+    """Idle cars drive toward where this hour is busy.
+
+    No passenger and no fare. A car already on a leg keeps its route.
+    The quiet hold means the stagger has elapsed and this car was not given a fare.
+    """
+    spot = busy_spot(game.username, now)
+    if not inside_circle(spot):
+        return
+    for car in _cars(session, game.username):
+        if car.status != "at_depot" or not car_may_depart(car):
+            continue
+        if not _parked_for_quiet(car, now) or _waiting_away_from_depot(car):
+            continue
+        if abs(float(car.hold_until) - _quiet_release(now)) > 1.0:
+            continue
+        car.passenger = ""
+        car.fare_name = ""
+        car.fare_lat = 0.0
+        car.fare_lng = 0.0
+        car.drop_lat = 0.0
+        car.drop_lng = 0.0
+        _begin(car, game, DEPOT, spot, now, "to_passenger")
+
+
 def tick_all(now: float | None = None, session: Session | None = None) -> None:
     if now is None:
         now = time.time()
@@ -689,6 +767,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
                 except Exception:
                     log.exception("empire car %s %s failed", car.username, car.sign)
             _allocate_one_free_taxi(game, session)
+            _travel_to_a_better_spot(game, session, now)
         session.commit()
     finally:
         if own_session:
