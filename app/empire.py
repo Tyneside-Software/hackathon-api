@@ -664,13 +664,9 @@ def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float
     return kind_name, place_point(pickup_name), place_point(drop_name)
 
 
-def engine_idle_spot(username: str, now: float, person: EmpirePerson | None = None) -> tuple[float, float]:
-    """Where an idle taxi goes. One draw for the fleet until each car draws for itself."""
-    if person is not None and (person.lat or person.lng):
-        spot = (float(person.lat), float(person.lng))
-        if inside_circle(spot):
-            return spot
-    _kind, pickup, _drop = draw_journey(username, now, "idle")
+def strategic_spot(username: str, sign: str, now: float) -> tuple[float, float]:
+    """A waiting spot for one unclaimed taxi. Not another taxi's passenger."""
+    _kind, pickup, _drop = draw_journey(username, now, f"wait-{sign}")
     return pickup
 
 
@@ -716,16 +712,10 @@ def car_takes_a_break(username: str, sign: str, now: float, waiting: int, free: 
     return rng.random() < 0.88
 
 
-def _even_idle(car: EmpireCar) -> bool:
-    return not airport_sign(car.sign) and int(car.sign[1:]) % 2 == 0
-
-
 def _should_break(car: EmpireCar, now: float) -> bool:
-    if not _even_idle(car) or not is_night(now):
-        return False
     session = object_session(car)
     if session is None:
-        return car_takes_a_break(car.username, car.sign, now, 0, 1)
+        return False
     people = _people(session, car.username)
     if any(person.sign == car.sign for person in people):
         return False
@@ -760,54 +750,49 @@ def _people(session: Session, username: str) -> list[EmpirePerson]:
 
 
 def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
-    """Draw the next person, or nobody when the spell is quiet.
+    """Draw the people for this spell, or nobody when it is quiet.
 
     A busy spell may draw more people than there are free taxis. That does not add a car.
     """
-    people = _people(session, game.username)
-    if len(people) >= spell_target(game.username, now):
-        return
-    _kind, pickup, drop = draw_journey(game.username, now, f"person-{len(people)}")
-    if not inside_circle(pickup) or not inside_circle(drop) or pickup == drop:
-        return
-    session.add(
-        EmpirePerson(
-            username=game.username,
-            name=NAMES[len(people) % len(NAMES)],
-            lat=pickup[0],
-            lng=pickup[1],
-            sign="",
-            drop_lat=drop[0],
-            drop_lng=drop[1],
+    target = spell_target(game.username, now)
+    for _ in range(20):
+        people = _people(session, game.username)
+        if len(people) >= target:
+            return
+        _kind, pickup, drop = draw_journey(game.username, now, f"person-{len(people)}")
+        if not inside_circle(pickup) or not inside_circle(drop) or pickup == drop:
+            return
+        session.add(
+            EmpirePerson(
+                username=game.username,
+                name=NAMES[len(people) % len(NAMES)],
+                lat=pickup[0],
+                lng=pickup[1],
+                sign="",
+                drop_lat=drop[0],
+                drop_lng=drop[1],
+            )
         )
-    )
+        session.flush()
 
 
 def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
-    """Give the waiting person one car that is still at the depot.
+    """Each waiting person is claimed by one depot taxi. A car on a leg is left alone.
 
-    A car already on a leg keeps the route and leg_started it already has.
+    People left over do not add a car. Two people do not claim the same taxi.
+    The app session does not autoflush, so this reads the cars already in memory.
     """
-    person = session.scalar(
-        select(EmpirePerson)
-        .where(
-            EmpirePerson.username == game.username,
-            EmpirePerson.sign == "",
-        )
-        .order_by(EmpirePerson.id)
-    )
-    if person is None:
-        return
-    taken = {
-        row.sign
-        for row in session.scalars(select(EmpirePerson).where(EmpirePerson.username == game.username)).all()
-        if row.sign
-    }
-    for car in _cars(session, game.username):
-        if car.status != "at_depot" or car.sign in taken or not car_may_depart(car):
+    people = _people(session, game.username)
+    taken = {person.sign for person in people if person.sign}
+    for person in people:
+        if person.sign:
             continue
-        person.sign = car.sign
-        return
+        for car in _cars(session, game.username):
+            if car.status != "at_depot" or car.sign in taken or not car_may_depart(car):
+                continue
+            person.sign = car.sign
+            taken.add(car.sign)
+            break
 
 
 def _waiting_away_from_depot(car: EmpireCar) -> bool:
@@ -973,10 +958,7 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
                 car.lat, car.lng = home
             if now < car.hold_until or not car_may_depart(car):
                 break
-            if _even_idle(car) and is_night(now):
-                break
-            _start_fare(car, game, car.hold_until)
-            continue
+            break
         elapsed = now - car.leg_started
         route = _loads(car.route_json, [])
         if car.duration_s <= 0 or elapsed < car.duration_s:
@@ -989,54 +971,70 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
     _check_in(car, now)
 
 
-def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> None:
-    """An idle night car hunts, or returns to its own depot and takes a break.
+def _collect_claimed(car: EmpireCar, game: EmpireGame, person: EmpirePerson, now: float) -> None:
+    """The claimed taxi collects that person, from where the car already is, then their drop."""
+    start = car_position(car, car_depot(car))
+    pickup = (float(person.lat), float(person.lng))
+    drop = (float(person.drop_lat), float(person.drop_lng))
+    name = person.name or _next_name(game)
+    car.passenger = name
+    car.fare_name = name
+    car.fare_lat, car.fare_lng = pickup
+    car.drop_lat, car.drop_lng = drop
+    _begin(car, game, start, pickup, now, "to_passenger")
+    _store_job(car)
 
-    The old hold until 01:00 is not this choice. A car already on a leg keeps it.
-    No passenger and no fare. 800000 is not a fare.
+
+def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> None:
+    """Claimed taxis collect their own person. Everyone else hunts or takes a break.
+
+    Other taxis do not drive to that person. A car already on a leg keeps it.
+    The depot is for a break. 800000 is not a fare.
     """
-    if not is_night(now):
-        return
     people = _people(session, game.username)
-    spot = engine_idle_spot(game.username, now, people[0] if people else None)
-    if not inside_circle(spot):
-        return
-    allocated = {person.sign for person in people if person.sign}
+    claimed = {person.sign: person for person in people if person.sign}
     cars = _cars(session, game.username)
     free = sum(1 for car in cars if car.status == "at_depot" and car_may_depart(car))
     for car in cars:
-        if car.status != "at_depot" or not car_may_depart(car) or not _even_idle(car):
-            continue
-        if now < float(car.hold_until):
-            continue
-        depot = car_depot(car)
-        start = car_position(car, depot)
-        takes_break = car.sign not in allocated and car_takes_a_break(
-            game.username, car.sign, now, len(people), free
-        )
-        if takes_break:
-            if haversine_km(start, depot) > 0.05:
-                car.passenger = ""
-                car.fare_name = ""
-                car.fare_lat = 0.0
-                car.fare_lng = 0.0
-                car.drop_lat = 0.0
-                car.drop_lng = 0.0
-                _begin(car, game, start, depot, now, "returning")
-            else:
-                _sit_on_break(car, now, depot)
+        try:
+            if _fault is not None and _fault(car):
+                raise RuntimeError("empire car fault")
+            if car.status != "at_depot" or not car_may_depart(car):
+                continue
+            if now < float(car.hold_until):
+                continue
+            person = claimed.get(car.sign)
+            if person is not None:
+                _collect_claimed(car, game, person, now)
+                continue
+            depot = car_depot(car)
+            start = car_position(car, depot)
+            if car_takes_a_break(game.username, car.sign, now, len(people), free):
+                if haversine_km(start, depot) > 0.05:
+                    car.passenger = ""
+                    car.fare_name = ""
+                    car.fare_lat = 0.0
+                    car.fare_lng = 0.0
+                    car.drop_lat = 0.0
+                    car.drop_lng = 0.0
+                    _begin(car, game, start, depot, now, "returning")
+                else:
+                    _sit_on_break(car, now, depot)
+                _store_job(car)
+                continue
+            spot = strategic_spot(game.username, car.sign, now)
+            if not inside_circle(spot) or haversine_km(start, spot) <= 0.05:
+                continue
+            car.passenger = ""
+            car.fare_name = ""
+            car.fare_lat = 0.0
+            car.fare_lng = 0.0
+            car.drop_lat = 0.0
+            car.drop_lng = 0.0
+            _begin(car, game, start, spot, now, "to_better_spot")
             _store_job(car)
-            continue
-        if haversine_km(start, spot) <= 0.05:
-            continue
-        car.passenger = ""
-        car.fare_name = ""
-        car.fare_lat = 0.0
-        car.fare_lng = 0.0
-        car.drop_lat = 0.0
-        car.drop_lng = 0.0
-        _begin(car, game, start, spot, now, "to_better_spot")
-        _store_job(car)
+        except Exception:
+            log.exception("empire car %s %s failed", car.username, car.sign)
 
 
 def tick_all(now: float | None = None, session: Session | None = None) -> None:
