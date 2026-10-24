@@ -300,7 +300,12 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
         game = session.get(EmpireGame, username)
         if game is None:
             game = EmpireGame(
-                username=username, created_at=str(int(now)), name_index=0, cash_pence=0, fare_in=0
+                username=username,
+                created_at=str(int(now)),
+                name_index=0,
+                cash_pence=0,
+                fare_in=0,
+                miles_driven=0,
             )
             session.add(game)
             for sign, colour, offset in CARS:
@@ -1087,8 +1092,25 @@ def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
     _begin(car, game, car_position(car), pickup, now, "to_passenger")
 
 
+def _remember_miles(car: EmpireCar) -> None:
+    """Keep the miles on a leg that just finished. Another firm's miles stay off this account."""
+    if car.firm:
+        return
+    session = object_session(car)
+    if session is None:
+        return
+    game = session.get(EmpireGame, _account_of(car.username))
+    if game is None:
+        return
+    route = _loads(car.route_json, [])
+    if len(route) < 2:
+        return
+    game.miles_driven = float(game.miles_driven or 0) + route_miles(route)
+
+
 def _finish_empty_move(car: EmpireCar, now: float) -> None:
     """The car has reached the better spot. That arrival is not a fare."""
+    _remember_miles(car)
     route = _loads(car.route_json, [])
     end = (float(route[-1][0]), float(route[-1][1])) if route else car_depot(car)
     car.lat, car.lng = end
@@ -1190,6 +1212,7 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         _finish_empty_move(car, now)
         return
     if car.status == "to_passenger":
+        _remember_miles(car)
         start = (car.fare_lat, car.fare_lng)
         end = (car.drop_lat, car.drop_lng)
         car.fare_name = ""
@@ -1199,6 +1222,7 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
     if car.status == "with_passenger":
         if not (car.firm or ""):
             game.fare_in = int(game.fare_in or 0) + completed_trip_tariff(car)
+        _remember_miles(car)
         route = _loads(car.route_json, [])
         if route:
             start = (float(route[-1][0]), float(route[-1][1]))
@@ -1220,6 +1244,7 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         car.job = "waiting"
         return
     if car.status == "returning":
+        _remember_miles(car)
         route = _loads(car.route_json, [])
         home = (float(route[-1][0]), float(route[-1][1])) if route else car_depot(car)
         car.status = "at_depot"
@@ -1743,7 +1768,8 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                     "seconds_left": leg_seconds_left(locked, now) if locked is not None else 0,
                 }
             )
-        miles = sum(driven_miles(car, now) for car in cars)
+        done = 0.0 if game is None else float(game.miles_driven or 0)
+        miles = done + sum(driven_miles(car, now) for car in cars)
         fare_in = 0 if game is None else int(game.fare_in or 0)
         lines = money_lines(len(cars), fare_in=fare_in, miles=miles)
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
