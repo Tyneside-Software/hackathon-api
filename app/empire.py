@@ -1593,6 +1593,70 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
             session.close()
 
 
+def _job_has_left(car: EmpireCar, now: float) -> bool:
+    """The car is off the start of this leg. Standing at the depot has not left."""
+    if car.status == "at_depot":
+        return False
+    route = _loads(car.route_json, [])
+    if len(route) < 2 or float(car.duration_s) <= 0:
+        return False
+    start = (float(route[0][0]), float(route[0][1]))
+    if haversine_km((float(car.lat), float(car.lng)), start) > 0.05:
+        return True
+    elapsed = max(0.0, float(now) - float(car.leg_started))
+    fraction = min(1.0, elapsed / float(car.duration_s))
+    return haversine_km(point_at(route, fraction), start) > 0.05
+
+
+def cancel_job(username: str, sign: str, now: float | None = None, session: Session | None = None) -> bool:
+    """Cancel a passenger job before the car moves. No fare and no fuel.
+
+    A car that has already left is left as it is.
+    """
+    username = normalise_username(username)
+    sign = (sign or "").strip()
+    if not sign:
+        return False
+    own_session = session is None
+    if session is None:
+        session = SessionLocal()
+    if now is None:
+        now = time.time()
+    try:
+        ensure_game(username, now, session)
+        car = next((item for item in _cars(session, username) if item.sign == sign), None)
+        if car is None or _job_has_left(car, now):
+            return False
+        person = _allocated_person(car)
+        collecting = car.status == "to_passenger" and bool(car.passenger or car.fare_name)
+        waiting_here = car.status == "at_depot" and person is not None
+        if not collecting and not waiting_here:
+            return False
+        if person is not None:
+            person.sign = ""
+        if collecting:
+            point = (float(car.lat), float(car.lng))
+            car.passenger = ""
+            car.fare_name = ""
+            car.fare_lat = 0.0
+            car.fare_lng = 0.0
+            car.drop_lat = 0.0
+            car.drop_lng = 0.0
+            car.status = "at_depot"
+            car.lat, car.lng = point
+            car.route_json = json.dumps([[point[0], point[1]], [point[0], point[1]]])
+            car.duration_s = 0
+            car.leg_started = now
+            car.hold_until = now
+            car.osrm = True
+            car.job = "waiting"
+        session.commit()
+        return True
+    finally:
+        if own_session:
+            session.close()
+
+
 def set_loiter(
     username: str,
     lat: float,
