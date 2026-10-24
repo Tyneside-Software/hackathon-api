@@ -1,10 +1,18 @@
 # Deploy — hackathon-api
 
-Push / merge to **`main`** deploys to Cloud Run in London (`europe-west2`). The site deploys separately (GitHub Pages).
+The live API is Docker Compose on the Linux box, not Cloud Run. The site nginx on that same box serves the static files the team edits. GitHub Pages publishes a second copy of the site.
 
-## Local (before you push)
+Full procedure, including SSH: site wiki page `docs/linux.md` (hash `#linux`).
 
-From `hackathon-api`:
+The SSH password is not in this repository. On Michael’s PC it is in:
+
+`C:\Users\MichaelThomson\Desktop\hackathon-linux.md`
+
+Do not copy that file into git.
+
+## Local
+
+From this folder:
 
 ```powershell
 python -m venv .venv
@@ -13,60 +21,37 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8080
 ```
 
-Or from the sibling site folder: `.\start.ps1`.
+Or, from the sibling site folder, `.\start.ps1` (site on port 5500 and this API on 8080).
 
 - http://127.0.0.1:8080/health — `ok` and `version`
-- http://127.0.0.1:8080/test_field
 - http://127.0.0.1:8080/docs
 
-## How GitHub deploy actually builds
+`python -m unittest tests.test_board`
 
-The connected service **hackathon-api-git** uses Cloud Build step `gcr.io/k8s-skaffold/pack` (buildpacks) on **ubuntu2404**. That OS only has Python **3.13 and 3.14**. It does **not** use the Dockerfile.
+## Loop
 
-That is why the repo has:
+1. Edit.
+2. `git pull --rebase origin main`, commit, `git push origin main`.
+3. Author used here: `Michael Thomson <michael.thomson@cloudconnectsoftware.com>`.
+4. `origin` must be `Tyneside-Software/hackathon-api`. The box pulls that remote. The `personal` remote is not what it pulls.
+5. From the sibling site folder run `.\scripts\box.ps1 update`. That SSHes as `michael` to `192.168.0.52` and runs `/usr/local/bin/update`. The password is read from the Desktop sheet.
 
-- Root `main.py` (pack defaults to `main:app`)
-- `Procfile` + `project.toml` entrypoint
-- `.python-version` = **3.13** (a `3.12` pin fails the build)
+Do not SSH to `100.65.94.5`. Tailscale SSH stops on a browser check. HTTP on that IP is fine: http://100.65.94.5:8080/health and http://100.65.94.5/board.html .
 
-After a green build, `GET /health` should report `"version": "0.1.5"` or later, and `GET /test_field` should be 200.
+`/usr/local/bin/update` needs no sudo password. It switches to the `website` user, fast-forwards `/home/website/hackathon-api`, runs `docker compose up -d --build --force-recreate`, fast-forwards `/var/www/hackathon-site`, and polls `/health`.
 
-## Manual deploy (if the trigger is not enough)
+SQLite is `/home/website/hackathon-api/data/hackathon.db`, mounted at `/data/hackathon.db`. The image copies `app/` in at build. Only `./data` is mounted. Do not delete that database, do not `docker compose down -v`, and do not re-seed. A pull without `--build` leaves the old code running. The update script always builds.
 
-```powershell
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+`/home/website` is mode 750. `michael` is not in the `docker` group. Root works with the password in the desktop file (`sudo -S`). Passwordless sudo is only `(website) NOPASSWD: /usr/local/bin/update`.
 
-gcloud run deploy hackathon-api `
-  --source . `
-  --region europe-west2 `
-  --allow-unauthenticated `
-  --set-env-vars "CORS_ORIGINS=https://hackathon.tyneside.software,http://127.0.0.1:5500,http://localhost:5500"
-```
+## What the container runs
 
-`--source .` uses the **Dockerfile** if that service is set to Docker. The GitHub trigger uses pack instead.
+`Dockerfile` base `python:3.14-slim`. `docker-entrypoint.sh` runs `uvicorn app.main:app` on port 8080 with one worker. Compose sets `DATABASE_URL=sqlite:////data/hackathon.db` and reads `.env` from the checkout on the box. That `.env` is not in git. Do not copy it into a repo.
 
-## Environment
+`VERSION` is `app/config.py`.
 
-| Variable | Required | Meaning |
-|----------|----------|---------|
-| `PORT` | Cloud Run sets it | Listen port |
-| `CORS_ORIGINS` | Yes in prod | Comma-separated origins; **replaces** code defaults if set |
+## Cloud Run
 
-Do not enable `allow_credentials` unless origins are locked tightly.
+Pushing `main` does not update the box. The old Cloud Run service `hackathon-api-git` in `europe-west2` used buildpacks (`Procfile`, `project.toml`, root `main.py`, Python 3.13), not this Dockerfile. That URL was not serving on 24 October 2026. `config.js` on the site does not point at it.
 
-## If Cloud Build fails
-
-| Log line | Cause | Fix in repo |
-|----------|--------|-------------|
-| `gcr.io/k8s-skaffold/pack` then `invalid Python version specified: 3.12` | ubuntu2404 has no 3.12 | `.python-version` / `GOOGLE_RUNTIME_VERSION` = `3.13` |
-| `No module named 'main'` / `uvicorn main:app` | Pack looks at repo-root `main.py` | Root `main.py` re-exports `app` |
-| `toomanyrequests` pulling `python:3.13-slim` | Docker Hub rate limit | Only applies if the trigger uses **Docker**; Dockerfile already uses `mirror.gcr.io` |
-| `bash: line 1: app/main.py: Permission denied` then `exit(126)` | Cloud Build trigger `_ENTRYPOINT` is `app/main.py`, so the container tries to exec the module instead of uvicorn | Keep `app/main.py` executable with a `__main__` uvicorn runner, or set `_ENTRYPOINT` to `uvicorn app.main:app --host 0.0.0.0 --port 8080` |
-
-Health for the platform: `GET /health`. It must not need Datastore.
-
-## Rollback
-
-Redeploy a previous Cloud Run revision, or revert `main` and push.
+Leave the buildpacks files in place. Do not treat a green Cloud Build as a production deploy.
