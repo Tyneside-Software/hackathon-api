@@ -725,6 +725,31 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertGreater(empire.haversine_km(pickup, empire.BERWICK), 40)
             self.assertGreater(empire.haversine_km(drop, empire.BERWICK), 40)
 
+    def test_ten_car_drop_off_is_further_than_the_pickup(self) -> None:
+        bearing = empire.trip_bearing("ada")
+        expected_pickup = empire.destination(empire.DEPOT, bearing, empire.PICKUP_MILES)
+        expected_drop = empire.destination(empire.DEPOT, bearing, empire.DROP_MILES)
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+        self.assertEqual(len(cars), 10)
+        self.assertEqual(empire.PICKUP_MILES, 1.2)
+        self.assertGreater(empire.DROP_MILES, empire.PICKUP_MILES)
+        for car in cars:
+            pickup = (car.fare_lat, car.fare_lng)
+            drop = (car.drop_lat, car.drop_lng)
+            pickup_miles = empire.haversine_km(empire.DEPOT, pickup) / empire.KM_PER_MILE
+            drop_miles = empire.haversine_km(empire.DEPOT, drop) / empire.KM_PER_MILE
+            self.assertAlmostEqual(pickup_miles, 1.2, delta=0.05, msg=car.sign)
+            self.assertGreater(drop_miles, pickup_miles, car.sign)
+            self.assertAlmostEqual(car.fare_lat, expected_pickup[0], places=4, msg=car.sign)
+            self.assertAlmostEqual(car.fare_lng, expected_pickup[1], places=4, msg=car.sign)
+            self.assertAlmostEqual(car.drop_lat, expected_drop[0], places=4, msg=car.sign)
+            self.assertAlmostEqual(car.drop_lng, expected_drop[1], places=4, msg=car.sign)
+            self.assertTrue(empire.inside_circle(pickup), car.sign)
+            self.assertTrue(empire.inside_circle(drop), car.sign)
+
     def test_import_does_not_start_the_clock_or_open_the_live_database(self) -> None:
         from fastapi.testclient import TestClient
 
