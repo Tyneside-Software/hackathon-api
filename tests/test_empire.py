@@ -421,6 +421,38 @@ class EmpireTableTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_journey_column_is_added_without_wiping_the_person(self) -> None:
+        from app.database import ensure_empire_person_journey_column
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_people ("
+                    "id INTEGER PRIMARY KEY, username VARCHAR(64), name VARCHAR(64), "
+                    "lat FLOAT, lng FLOAT, sign VARCHAR(8))"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO empire_people (username, name, lat, lng, sign) "
+                    "VALUES ('ada', 'Mina', 55.03, -1.51, '')"
+                )
+            )
+        ensure_empire_person_journey_column(engine)
+        ensure_empire_person_journey_column(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_people")}
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT username, name, sign, journey FROM empire_people")).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_people")).scalar()
+        self.assertIn("journey", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.name, "Mina")
+        self.assertEqual(row.sign, "")
+        self.assertEqual(row.journey, "")
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
 
 class EmpireRegisterTests(unittest.TestCase):
     def test_register_creates_three_cars_at_the_depot(self) -> None:
@@ -3489,6 +3521,32 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertAlmostEqual(started[0][1], whitley[1], places=4)
             self.assertGreater(empire.haversine_km((started[0][0], started[0][1]), empire.DEPOT), 0.2)
             self.assertEqual(len(session.scalars(select(EmpireCar).where(EmpireCar.username == "legstart")).all()), 10)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_the_feed_sends_the_journey_kind_the_draw_already_chose(self) -> None:
+        morning = datetime(2023, 11, 15, 8, 0, tzinfo=timezone.utc).timestamp()
+        kinds = {kind for kind, _pickups, _drops, _weights in empire.JOURNEY_KINDS}
+        name = None
+        for index in range(40):
+            candidate = f"kind{index}"
+            if empire.spell_target(candidate, morning) > 0:
+                name = candidate
+                break
+        self.assertIsNotNone(name)
+        with self.Session() as session:
+            game = empire.ensure_game(name, morning, session)
+            empire._ensure_waiting_person(game, session, morning)
+            session.commit()
+            rows = session.scalars(
+                select(empire.EmpirePerson).where(empire.EmpirePerson.username == name).order_by(empire.EmpirePerson.id)
+            ).all()
+            self.assertGreater(len(rows), 0)
+            for index, person in enumerate(rows):
+                kind, _pickup, _drop = empire.draw_journey(name, morning, f"person-{index}")
+                self.assertEqual(person.journey, kind)
+                self.assertIn(kind, kinds)
+            body = empire.snapshot(name, morning, session)
+            self.assertEqual([item["journey"] for item in body["people"]], [person.journey for person in rows])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_the_feed_names_the_place_at_the_end_of_the_leg(self) -> None:

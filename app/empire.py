@@ -1016,7 +1016,7 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
         if len(people) >= target:
             return
         index = int(game.name_index or 0)
-        _kind, pickup, drop = draw_journey(game.username, now, f"person-{index}")
+        kind, pickup, drop = draw_journey(game.username, now, f"person-{index}")
         if not inside_circle(pickup) or not inside_circle(drop) or pickup == drop:
             return
         session.add(
@@ -1029,6 +1029,7 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
                 drop_lat=drop[0],
                 drop_lng=drop[1],
                 arrived=now,
+                journey=kind,
             )
         )
         game.name_index = index + 1
@@ -1471,7 +1472,7 @@ def _take_first_bought_fare(
         return False
     account = game.username
     for attempt in range(16):
-        _kind, pickup, drop = draw_journey(account, now, f"bought-{car.sign}-{attempt}")
+        kind, pickup, drop = draw_journey(account, now, f"bought-{car.sign}-{attempt}")
         if not inside_circle(pickup) or not inside_circle(drop):
             continue
         if haversine_km(pickup, drop) <= 0.05:
@@ -1485,6 +1486,7 @@ def _take_first_bought_fare(
             drop_lat=drop[0],
             drop_lng=drop[1],
             arrived=now,
+            journey=kind,
         )
         session.add(person)
         session.flush()
@@ -2073,6 +2075,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                     "sign": person.sign,
                     "waiting_s": waiting_seconds(person, now),
                     "seconds_left": leg_seconds_left(locked, now) if locked is not None else 0,
+                    "journey": person.journey or "",
                 }
             )
         done = 0.0 if game is None else float(game.miles_driven or 0)
