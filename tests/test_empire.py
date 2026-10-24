@@ -446,6 +446,22 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertGreater(empire.haversine_km(pickup, empire.BERWICK), 40)
         self.assertGreater(empire.haversine_km(drop, empire.BERWICK), 40)
 
+    def test_ten_car_trips_stay_inside_the_circle(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+        self.assertEqual(len(cars), 10)
+        for car in cars:
+            pickup = (car.fare_lat, car.fare_lng)
+            drop = (car.drop_lat, car.drop_lng)
+            self.assertTrue(empire.inside_circle(pickup), car.sign)
+            self.assertTrue(empire.inside_circle(drop), car.sign)
+            self.assertNotEqual(pickup, empire.BERWICK)
+            self.assertNotEqual(drop, empire.BERWICK)
+            self.assertGreater(empire.haversine_km(pickup, empire.BERWICK), 40)
+            self.assertGreater(empire.haversine_km(drop, empire.BERWICK), 40)
+
     def test_import_does_not_start_the_clock_or_open_the_live_database(self) -> None:
         from fastapi.testclient import TestClient
 
