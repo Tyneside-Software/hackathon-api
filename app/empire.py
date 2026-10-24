@@ -257,7 +257,7 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
     try:
         game = session.get(EmpireGame, username)
         if game is None:
-            game = EmpireGame(username=username, created_at=str(int(now)), name_index=0)
+            game = EmpireGame(username=username, created_at=str(int(now)), name_index=0, cash_pence=0)
             session.add(game)
             for sign, colour, offset in CARS:
                 session.add(
@@ -526,7 +526,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
     if session is None:
         session = SessionLocal()
     try:
-        ensure_game(username, now, session)
+        game = ensure_game(username, now, session)
         cars = _cars(session, username)
         moving = [car for car in cars if car.status != "at_depot"]
         unavailable = any(not car.osrm for car in moving)
@@ -563,6 +563,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                 )
         miles = sum(driven_miles(car, now) for car in cars)
         lines = money_lines(len(cars), miles=miles)
+        cash_pence = 0 if game is None else int(game.cash_pence or 0)
         return {
             "ok": True,
             "username": username,
@@ -573,6 +574,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "cars": payload_cars,
             "fares": fares,
             "fare_in": lines["fare_in"],
+            "cash_pence": cash_pence,
             "driver_share": lines["driver_share"],
             "fuel": lines["fuel"],
             "standing": lines["standing"],

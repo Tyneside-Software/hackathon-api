@@ -13,7 +13,7 @@ os.close(_fd)
 os.environ["DATABASE_URL"] = "sqlite:///" + TEMP_DB.replace("\\", "/")
 sys.path.insert(0, str(ROOT))
 
-from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
 import app.empire as empire
@@ -39,6 +39,33 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("device_id", device_columns)
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("location_pings")})
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("device_links")})
+        self.assertIn("cash_pence", {col["name"] for col in insp.get_columns("empire_games")})
+
+    def test_cash_pence_column_is_added_without_wiping_the_game(self) -> None:
+        from app.database import ensure_empire_cash_column
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_games ("
+                    "username VARCHAR(64) PRIMARY KEY, created_at VARCHAR(64), name_index INTEGER)"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO empire_games (username, created_at, name_index) VALUES ('ada', '1', 0)")
+            )
+        ensure_empire_cash_column(engine)
+        ensure_empire_cash_column(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_games")}
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT username, cash_pence FROM empire_games")).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_games")).scalar()
+        self.assertIn("cash_pence", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.cash_pence, 0)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
 
 class EmpireRegisterTests(unittest.TestCase):
@@ -73,6 +100,22 @@ class EmpireRegisterTests(unittest.TestCase):
             token = client.post("/login", json={"username": "tenfeed", "password": "password1"}).json()["access_token"]
             body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
         self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual([car["sign"] for car in body["cars"]], [f"T{index}" for index in range(1, 11)])
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_feed_returns_cash_pence_default_zero(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "cashzero", "password": "password1"}).status_code, 201)
+            token = client.post("/login", json={"username": "cashzero", "password": "password1"}).json()["access_token"]
+            body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
+        self.assertEqual(body["cash_pence"], 0)
+        self.assertIs(type(body["cash_pence"]), int)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertNotEqual(body["fare_in"], 800000)
         self.assertEqual([car["sign"] for car in body["cars"]], [f"T{index}" for index in range(1, 11)])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
@@ -1533,8 +1576,12 @@ class EmpireFleetTests(unittest.TestCase):
                 "fuel",
                 "standing",
                 "new_car",
+                "cash_pence",
             },
         )
+        self.assertEqual(body["cash_pence"], 0)
+        self.assertIs(type(body["cash_pence"]), int)
+        self.assertEqual(body["fare_in"], 0)
         self.assertTrue(body["ok"])
         self.assertEqual(body["check_s"], 10)
         self.assertEqual(body["trail_s"], 600)

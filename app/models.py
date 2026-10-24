@@ -626,6 +626,7 @@ class EmpireGame(Base):
     username: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[str] = mapped_column(String(64), default="")
     name_index: Mapped[int] = mapped_column(Integer, default=0)
+    cash_pence: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class EmpireCar(Base):
