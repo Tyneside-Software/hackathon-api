@@ -148,6 +148,21 @@ def ensure_empire_person_drop_columns(bind=None) -> None:
             conn.execute(text(f"ALTER TABLE empire_people ADD COLUMN {name} FLOAT NOT NULL DEFAULT 0"))
 
 
+def ensure_empire_person_journey_column(bind=None) -> None:
+    """Add the drawn journey kind to an existing empire_people table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_people" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_people")}
+    if "journey" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_people ADD COLUMN journey VARCHAR(32) NOT NULL DEFAULT ''"))
+
+
 def ensure_empire_person_arrived_column(bind=None) -> None:
     """Add the arrival time to an existing empire_people table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -228,6 +243,7 @@ def init_db() -> None:
         ensure_empire_firm_columns(engine)
         ensure_empire_person_drop_columns(engine)
         ensure_empire_person_arrived_column(engine)
+        ensure_empire_person_journey_column(engine)
     except Exception:
         pass
     try:

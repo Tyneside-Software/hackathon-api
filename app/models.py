@@ -682,3 +682,4 @@ class EmpirePerson(Base):
     drop_lng: Mapped[float] = mapped_column(Float, default=0)
     sign: Mapped[str] = mapped_column(String(8), default="")
     arrived: Mapped[float] = mapped_column(Float, default=0)
+    journey: Mapped[str] = mapped_column(String(32), default="")
