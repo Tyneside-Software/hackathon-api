@@ -63,6 +63,21 @@ def ensure_empire_cash_column(bind=None) -> None:
         conn.execute(text("ALTER TABLE empire_games ADD COLUMN cash_pence INTEGER NOT NULL DEFAULT 0"))
 
 
+def ensure_empire_job_column(bind=None) -> None:
+    """Add job to an existing empire_cars table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_cars" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_cars")}
+    if "job" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_cars ADD COLUMN job VARCHAR(64) NOT NULL DEFAULT ''"))
+
+
 def init_db() -> None:
     from . import models  # noqa: F401 — register tables
     from sqlalchemy import inspect, text
@@ -83,6 +98,7 @@ def init_db() -> None:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
         ensure_empire_cash_column(engine)
+        ensure_empire_job_column(engine)
     except Exception:
         pass
     try:

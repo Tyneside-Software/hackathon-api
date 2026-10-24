@@ -68,6 +68,7 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("location_pings")})
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("device_links")})
         self.assertIn("cash_pence", {col["name"] for col in insp.get_columns("empire_games")})
+        self.assertIn("job", {col["name"] for col in insp.get_columns("empire_cars")})
 
     def test_cash_pence_column_is_added_without_wiping_the_game(self) -> None:
         from app.database import ensure_empire_cash_column
@@ -92,6 +93,34 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("cash_pence", columns)
         self.assertEqual(row.username, "ada")
         self.assertEqual(row.cash_pence, 0)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_job_column_is_added_without_wiping_the_car(self) -> None:
+        from app.database import ensure_empire_job_column
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_cars ("
+                    "id INTEGER PRIMARY KEY, username VARCHAR(64), sign VARCHAR(8), status VARCHAR(32))"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO empire_cars (username, sign, status) VALUES ('ada', 'T1', 'to_passenger')")
+            )
+        ensure_empire_job_column(engine)
+        ensure_empire_job_column(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_cars")}
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT username, sign, status, job FROM empire_cars")).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_cars")).scalar()
+        self.assertIn("job", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.sign, "T1")
+        self.assertEqual(row.status, "to_passenger")
+        self.assertEqual(row.job, "")
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
@@ -1736,8 +1765,10 @@ class EmpireFleetTests(unittest.TestCase):
             session.commit()
             mixed = empire.snapshot("ada", NOW, session)
         self.assertEqual(len(driving["cars"]), 10)
-        for car in driving["cars"]:
-            self.assertIn(car["status"], allowed)
+        driving_status = {car["status"] for car in driving["cars"]}
+        self.assertTrue(driving_status <= set(empire.STATUSES))
+        self.assertIn("to_passenger", driving_status)
+        self.assertIn("to_better_spot", driving_status)
         self.assertEqual({car["status"] for car in mixed["cars"]}, set(allowed))
         for car in mixed["cars"]:
             self.assertIn(car["status"], allowed)
@@ -2073,7 +2104,7 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(cars["T1"][1:], empire.night_ends(account), account)
             self.assertIn(cars["T1"][1], pickups, account)
             self.assertIn(cars["T1"][2], homes, account)
-            self.assertEqual(cars["T2"][0], "to_passenger", account)
+            self.assertEqual(cars["T2"][0], "to_better_spot", account)
             self.assertEqual(cars["T2"][1:], ((0.0, 0.0), (0.0, 0.0)), account)
             self.assertEqual(cars["T10"][0], "to_passenger", account)
             self.assertEqual(cars["T10"][1], airport, account)
@@ -2397,7 +2428,8 @@ class EmpireFleetTests(unittest.TestCase):
             kept = session.scalars(
                 select(EmpireCar).where(EmpireCar.username == "emptymove", EmpireCar.sign == "T1")
             ).one()
-            self.assertEqual(mover.status, "to_passenger")
+            self.assertEqual(mover.status, "to_better_spot")
+            self.assertEqual(mover.job, "travelling to a better spot")
             self.assertEqual(mover.passenger, "")
             self.assertEqual(mover.fare_name, "")
             self.assertEqual((mover.fare_lat, mover.fare_lng, mover.drop_lat, mover.drop_lng), (0.0, 0.0, 0.0, 0.0))
@@ -2417,7 +2449,8 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertTrue(empire.inside_circle((mover.lat, mover.lng)))
             self.assertEqual(other.passenger, "")
             self.assertEqual(other.fare_name, "")
-            self.assertEqual(other.status, "to_passenger")
+            self.assertEqual(other.status, "to_better_spot")
+            self.assertEqual(other.job, "travelling to a better spot")
             self.assertEqual(kept.route_json, kept_route)
             self.assertEqual(kept.leg_started, kept_started)
             self.assertTrue(kept.passenger)
@@ -2442,6 +2475,79 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(later["people"][0]["sign"], "T2")
             self.assertEqual(later["fare_in"], 0)
             self.assertEqual([car["sign"] for car in later["cars"]], [f"T{number}" for number in range(1, 11)])
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_the_car_stores_one_job_and_the_four_statuses_keep_working(self) -> None:
+        self.assertEqual(
+            empire.STATUSES,
+            ("at_depot", "to_passenger", "with_passenger", "returning", "to_better_spot"),
+        )
+        self.assertEqual(
+            empire.JOBS,
+            ("waiting", "travelling to a better spot", "collecting", "carrying", "returning"),
+        )
+        with self.Session() as session:
+            empire.ensure_game("onejob", NOW, session)
+            parked = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "onejob", EmpireCar.sign == "T1")
+            ).one()
+            self.assertEqual(parked.status, "at_depot")
+            self.assertEqual(parked.job, "waiting")
+            empire.tick_all(NOW + 1, session)
+            early = empire.snapshot("onejob", NOW + 1, session)
+            self.assertEqual(self._car(early, "T1")["status"], "to_passenger")
+            self.assertEqual(self._car(early, "T1")["job"], "collecting")
+            self.assertEqual(self._car(early, "T2")["status"], "at_depot")
+            self.assertEqual(self._car(early, "T2")["job"], "waiting")
+            self.assertEqual([car["sign"] for car in early["cars"]], [f"T{number}" for number in range(1, 11)])
+            started = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "onejob", EmpireCar.sign == "T1")
+            ).one()
+            kept_route = started.route_json
+            kept_started = started.leg_started
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("onejob", NOW + 64, session)
+            self.assertEqual(self._car(body, "T1")["status"], "to_passenger")
+            self.assertEqual(self._car(body, "T1")["job"], "collecting")
+            self.assertEqual(self._car(body, "T2")["status"], "to_better_spot")
+            self.assertEqual(self._car(body, "T2")["job"], "travelling to a better spot")
+            self.assertEqual(self._car(body, "T2")["passenger"], "")
+            self.assertNotIn("T2", {fare["sign"] for fare in body["fares"]})
+            self.assertEqual(body["fare_in"], 0)
+            self.assertNotEqual(body["fare_in"], 800000)
+            self.assertEqual(len(body["cars"]), 10)
+            self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
+            kept = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "onejob", EmpireCar.sign == "T1")
+            ).one()
+            self.assertEqual(kept.route_json, kept_route)
+            self.assertEqual(kept.leg_started, kept_started)
+            self.assertEqual(kept.job, "collecting")
+            idle = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "onejob", EmpireCar.sign == "T2")
+            ).one()
+            self.assertEqual(idle.job, "travelling to a better spot")
+            sample = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "onejob", EmpireCar.sign == "T3")
+            ).one()
+            sample.status = "with_passenger"
+            session.commit()
+            carrying = empire.snapshot("onejob", NOW + 64, session)
+            self.assertEqual(self._car(carrying, "T3")["status"], "with_passenger")
+            self.assertEqual(self._car(carrying, "T3")["job"], "carrying")
+            sample.status = "returning"
+            session.commit()
+            back = empire.snapshot("onejob", NOW + 64, session)
+            self.assertEqual(self._car(back, "T3")["status"], "returning")
+            self.assertEqual(self._car(back, "T3")["job"], "returning")
+            sample.status = "at_depot"
+            session.commit()
+            home = empire.snapshot("onejob", NOW + 64, session)
+            self.assertEqual(self._car(home, "T3")["status"], "at_depot")
+            self.assertEqual(self._car(home, "T3")["job"], "waiting")
+            self.assertEqual(self._car(home, "T1")["status"], "to_passenger")
+            self.assertEqual(self._car(home, "T2")["status"], "to_better_spot")
+            self.assertEqual([car["sign"] for car in home["cars"]], [f"T{number}" for number in range(1, 11)])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
