@@ -95,6 +95,28 @@ def ensure_empire_job_column(bind=None) -> None:
         conn.execute(text("ALTER TABLE empire_cars ADD COLUMN job VARCHAR(64) NOT NULL DEFAULT ''"))
 
 
+def ensure_empire_firm_columns(bind=None) -> None:
+    """Add firm and its depot to an existing empire_cars table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_cars" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_cars")}
+    wanted = {
+        "firm": "VARCHAR(16) NOT NULL DEFAULT ''",
+        "depot_lat": "FLOAT NOT NULL DEFAULT 0",
+        "depot_lng": "FLOAT NOT NULL DEFAULT 0",
+    }
+    missing = [name for name in wanted if name not in cols]
+    if not missing:
+        return
+    with target.begin() as conn:
+        for name in missing:
+            conn.execute(text(f"ALTER TABLE empire_cars ADD COLUMN {name} {wanted[name]}"))
+
+
 def init_db() -> None:
     from . import models  # noqa: F401 — register tables
     from sqlalchemy import inspect, text
@@ -116,6 +138,7 @@ def init_db() -> None:
                     conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
         ensure_empire_cash_column(engine)
         ensure_empire_job_column(engine)
+        ensure_empire_firm_columns(engine)
         ensure_empire_person_drop_columns(engine)
     except Exception:
         pass

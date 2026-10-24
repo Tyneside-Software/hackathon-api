@@ -656,6 +656,9 @@ class EmpireCar(Base):
     hold_until: Mapped[float] = mapped_column(Float, default=0)
     next_check: Mapped[float] = mapped_column(Float, default=0)
     depart_offset: Mapped[float] = mapped_column(Float, default=0)
+    firm: Mapped[str] = mapped_column(String(16), default="")
+    depot_lat: Mapped[float] = mapped_column(Float, default=0)
+    depot_lng: Mapped[float] = mapped_column(Float, default=0)
 
 
 class EmpirePerson(Base):
