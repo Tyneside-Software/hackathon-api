@@ -475,6 +475,26 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(names[5], "Tom")
         self.assertEqual(names[6], "Mina")
 
+    def test_collected_ten_car_fare_leaves_the_feed(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            waiting = empire.snapshot("ada", NOW + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for car in cars:
+                car.duration_s = 10
+                car.leg_started = NOW
+                car.route_json = "[[55.0367, -1.5075], [55.04, -1.51]]"
+            session.commit()
+            empire.tick_all(NOW + 10, session)
+            arrived = empire.snapshot("ada", NOW + 10, session)
+        self.assertEqual(len(waiting["fares"]), 10)
+        self.assertEqual({fare["sign"] for fare in waiting["fares"]}, {f"T{index}" for index in range(1, 11)})
+        self.assertEqual(arrived["fares"], [])
+        for index in range(1, 11):
+            self.assertEqual(self._car(arrived, f"T{index}")["status"], "with_passenger")
+
     def test_depot_car_still_has_a_position(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
