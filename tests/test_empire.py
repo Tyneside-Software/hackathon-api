@@ -440,6 +440,41 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertGreaterEqual(point[2], NOW - 600)
             self.assertNotEqual(point[2], NOW - 601)
 
+    def test_ten_car_pings_older_than_ten_minutes_leave_the_trail(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for index, car in enumerate(sorted(cars, key=lambda item: int(item.sign[1:])), start=1):
+                kept_lng = round(-1.4 - index * 0.01, 6)
+                kept_lat = round(55.1 + index * 0.01, 6)
+                car.trail_json = (
+                    f"[[{round(-1.5 - index * 0.01, 6)}, {round(55.0 + index * 0.01, 6)}, {NOW - 601}], "
+                    f"[{kept_lng}, {kept_lat}, {NOW - 600}]]"
+                )
+                car.next_check = NOW
+            session.commit()
+            empire.tick_all(NOW, session)
+            body = empire.snapshot("ada", NOW, session)
+        self.assertEqual(len(body["cars"]), 10)
+        for index in range(1, 11):
+            trail = self._car(body, f"T{index}")["trail"]
+            stamps = []
+            for point in trail:
+                self.assertEqual(len(point), 3)
+                lng, lat, stamp = point
+                self.assertLess(lng, 0)
+                self.assertGreater(lat, 50)
+                self.assertIs(type(stamp), int)
+                self.assertGreaterEqual(stamp, NOW - 600)
+                self.assertNotEqual(stamp, NOW - 601)
+                stamps.append(stamp)
+            self.assertIn(NOW - 600, stamps)
+            self.assertIn(NOW, stamps)
+            kept = next(point for point in trail if point[2] == NOW - 600)
+            self.assertAlmostEqual(kept[0], -1.4 - index * 0.01, places=5)
+            self.assertAlmostEqual(kept[1], 55.1 + index * 0.01, places=5)
+
     def test_ten_car_trail_point_is_longitude_then_latitude(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
