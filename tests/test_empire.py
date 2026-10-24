@@ -805,6 +805,27 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(len(self._car(body, "T1")["trail"]), 1)
         self.assertEqual(self._car(body, "T1")["trail"][0][2], NOW + 10)
 
+    def test_ten_car_check_in_appends_one_trail_point(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 10, session)
+            checked = empire.snapshot("ada", NOW + 10, session)
+            empire.tick_all(NOW + 11, session)
+            quiet = empire.snapshot("ada", NOW + 11, session)
+        self.assertEqual(len(checked["cars"]), 10)
+        for index in range(1, 11):
+            sign = f"T{index}"
+            first = self._car(checked, sign)["trail"]
+            second = self._car(quiet, sign)["trail"]
+            self.assertEqual(len(first), 1, sign)
+            self.assertEqual(second, first, sign)
+            lng, lat, stamp = first[0]
+            self.assertEqual(len(first[0]), 3)
+            self.assertLess(lng, 0)
+            self.assertGreater(lat, 50)
+            self.assertEqual(stamp, NOW + 10)
+            self.assertNotEqual(stamp, NOW + 11)
+
     def test_three_cars_can_hold_three_statuses(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
