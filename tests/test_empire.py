@@ -268,6 +268,21 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(len(stored), 11)
         self.assertNotIn("T12", signs)
 
+    def test_payment_under_800000_does_not_add_a_car(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            added = empire.buy_car("ada", 799999, NOW, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertIsNone(added)
+        signs = [car["sign"] for car in body["cars"]]
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
+        self.assertNotIn("T11", signs)
+        self.assertEqual(empire.NEW_CAR_PENCE, 800000)
+        self.assertEqual(body["new_car"], 800000)
+        for car in body["cars"]:
+            self.assertNotEqual(car["sign"], "T11")
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
