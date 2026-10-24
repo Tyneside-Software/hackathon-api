@@ -1556,13 +1556,15 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
     if now is None:
         now = time.time()
     try:
-        ensure_game(username, now, session)
+        game = ensure_game(username, now, session)
         existing = next((car for car in _cars(session, username) if car.sign == "T11"), None)
         if existing is not None:
             if existing.depart_offset < 0:
                 existing.depart_offset = 0
+                game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
                 session.commit()
             return "T11"
+        game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
         session.add(
             EmpireCar(
                 username=username,

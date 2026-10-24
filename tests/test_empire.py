@@ -622,6 +622,57 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(empire.NEW_CAR_PENCE, 800000)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_post_buy_subtracts_800000_from_that_account_only(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "cashpost", "password": "password1"}).status_code, 201)
+            self.assertEqual(client.post("/register", json={"username": "cashstay", "password": "password1"}).status_code, 201)
+            token = client.post("/login", json={"username": "cashpost", "password": "password1"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            other_token = client.post("/login", json={"username": "cashstay", "password": "password1"}).json()["access_token"]
+            other_headers = {"Authorization": f"Bearer {other_token}"}
+            before = client.get("/v1/empire", headers=headers).json()
+            other_before = client.get("/v1/empire", headers=other_headers).json()
+            with SessionLocal() as session:
+                game = session.get(EmpireGame, "cashpost")
+                game.cash_pence = 500000
+                game.fare_in = 1040
+                session.commit()
+            short = client.post("/v1/empire/buy", headers=headers, json={"pence": 799999})
+            after_short = client.get("/v1/empire", headers=headers).json()
+            bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
+            again = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
+            after = client.get("/v1/empire", headers=headers).json()
+            other = client.get("/v1/empire", headers=other_headers).json()
+        self.assertEqual(before["cash_pence"], 0)
+        self.assertEqual(before["fare_in"], 0)
+        self.assertEqual(other_before["cash_pence"], 0)
+        self.assertGreaterEqual(short.status_code, 400)
+        self.assertEqual(after_short["cash_pence"], 500000)
+        self.assertEqual(after_short["fare_in"], 1040)
+        self.assertNotIn("T11", [car["sign"] for car in after_short["cars"]])
+        self.assertEqual(bought.status_code, 200)
+        self.assertEqual(bought.json()["sign"], "T11")
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["sign"], "T11")
+        self.assertEqual(after["cash_pence"], 500000 - 800000)
+        self.assertEqual(after["fare_in"], 1040)
+        self.assertNotEqual(after["fare_in"], 1040 - 800000)
+        self.assertNotEqual(after["cash_pence"], 800000)
+        self.assertEqual(after["new_car"], 800000)
+        self.assertEqual([car["sign"] for car in after["cars"]], [f"T{index}" for index in range(1, 12)])
+        self.assertNotIn("T12", [car["sign"] for car in after["cars"]])
+        self.assertEqual(other["cash_pence"], 0)
+        self.assertEqual(other["fare_in"], 0)
+        self.assertEqual(len(other["cars"]), 10)
+        self.assertNotIn(2860, (after["cash_pence"], after["fare_in"], other["cash_pence"]))
+        self.assertNotIn(1130, (after["cash_pence"], after["fare_in"], other["cash_pence"]))
+        self.assertNotIn(1240, (after["cash_pence"], after["fare_in"], other["cash_pence"]))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_post_buy_without_a_token_adds_no_car(self) -> None:
         from fastapi.testclient import TestClient
 
@@ -3876,8 +3927,9 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["driver_share"], body["fare_in"] // 2)
         self.assertNotEqual(body["fare_in"], 800000)
         self.assertNotEqual(body["fare_in"], 1530 + 800000)
-        self.assertEqual(body["cash_pence"], 0)
+        self.assertEqual(body["cash_pence"], -800000)
         self.assertEqual(body["new_car"], 800000)
+        self.assertNotEqual(body["fare_in"], 1530 - 800000)
         self.assertEqual(other["fare_in"], 0)
         self.assertEqual(other["driver_share"], 0)
         self.assertEqual(other["cash_pence"], 0)
