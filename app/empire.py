@@ -535,12 +535,7 @@ def hour_pickup(username: str, now: float) -> tuple[float, float]:
 
 def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
     """One person waits with no taxi. A later tick does not add another."""
-    waiting = session.scalar(
-        select(EmpirePerson).where(
-            EmpirePerson.username == game.username,
-            EmpirePerson.sign == "",
-        )
-    )
+    waiting = session.scalar(select(EmpirePerson).where(EmpirePerson.username == game.username))
     if waiting is not None:
         return
     pickup = hour_pickup(game.username, now)
@@ -555,6 +550,31 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
             sign="",
         )
     )
+
+
+def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
+    """Give the waiting person one car that is still at the depot.
+
+    A car already on a leg keeps the route and leg_started it already has.
+    """
+    person = session.scalar(
+        select(EmpirePerson).where(
+            EmpirePerson.username == game.username,
+            EmpirePerson.sign == "",
+        )
+    )
+    if person is None:
+        return
+    taken = {
+        row.sign
+        for row in session.scalars(select(EmpirePerson).where(EmpirePerson.username == game.username)).all()
+        if row.sign
+    }
+    for car in _cars(session, game.username):
+        if car.status != "at_depot" or car.sign in taken or not car_may_depart(car):
+            continue
+        person.sign = car.sign
+        return
 
 
 def _quiet_release(now: float) -> float:
@@ -668,6 +688,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
                     advance_car(car, game, now)
                 except Exception:
                     log.exception("empire car %s %s failed", car.username, car.sign)
+            _allocate_one_free_taxi(game, session)
         session.commit()
     finally:
         if own_session:
