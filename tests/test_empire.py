@@ -862,6 +862,40 @@ class EmpireFleetTests(unittest.TestCase):
             left = empire.snapshot("ada", NOW + 2, session)
         self.assertEqual(self._car(left, "T11")["status"], "to_passenger")
 
+    def test_new_car_800000_is_not_added_to_fare_in(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            session.add(
+                EmpireCar(
+                    username="ada",
+                    sign="T11",
+                    colour="#ffffff",
+                    status="at_depot",
+                    passenger="",
+                    lat=55.0367,
+                    lng=-1.5075,
+                    route_json="[]",
+                    duration_s=0,
+                    leg_started=NOW,
+                    osrm=False,
+                    trail_json="[]",
+                    fare_name="",
+                    hold_until=NOW,
+                    next_check=NOW + empire.CHECK_S,
+                    depart_offset=-1,
+                )
+            )
+            session.commit()
+            extra = session.scalars(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11")).one()
+            self.assertTrue(empire.pay_new_car(extra, 800000))
+            session.commit()
+            empire.tick_all(NOW + 2, session)
+            body = empire.snapshot("ada", NOW + 2, session)
+        self.assertEqual(body["new_car"], 800000)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertNotEqual(body["fare_in"], 800000)
+        self.assertNotEqual(body["fare_in"], body["new_car"])
+
     def test_ten_car_feed_hides_the_company_totals(self) -> None:
         banned = {2860, 1130, 1240}
 
