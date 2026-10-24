@@ -26,6 +26,8 @@ log = logging.getLogger("hackathon-api")
 DEPOT = (55.0367, -1.5075)
 CIRCLE_CENTRE = (54.9783, -1.6178)
 CIRCLE_RADIUS_KM = 80.467
+LOITER_MIN_KM = 0.2
+LOITER_MAX_KM = 8.0
 EARTH_KM = 6371.0
 KM_PER_MILE = 1.609344
 MPH = 30.0
@@ -686,6 +688,94 @@ def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float
     return kind_name, place_point(pickup_name), place_point(drop_name)
 
 
+def _point_key(point: tuple[float, float]) -> tuple[float, float]:
+    return (round(point[0], 5), round(point[1], 5))
+
+
+def _point_taken(point: tuple[float, float], taken: tuple[tuple[float, float], ...]) -> bool:
+    """True when this point is already one a car or a person is using."""
+    key = _point_key(point)
+    for other in taken:
+        if _point_key(other) == key or haversine_km(point, other) <= 0.05:
+            return True
+    return False
+
+
+def _inside_loiter(point: tuple[float, float], centre: tuple[float, float], radius_km: float) -> bool:
+    return inside_circle(point) and haversine_km(point, centre) <= radius_km + 1e-4
+
+
+def stored_loiter(game: EmpireGame) -> tuple[str, tuple[float, float], float] | None:
+    """The patch the player set, or nothing when it has not been set."""
+    radius = float(game.loiter_km or 0)
+    if radius <= 0:
+        return None
+    firm = (game.loiter_firm or "").strip().lower()
+    return firm, (float(game.loiter_lat), float(game.loiter_lng)), radius
+
+
+def loiter_for_fleet(
+    game: EmpireGame,
+    draw_as: str | None,
+) -> tuple[tuple[float, float], float] | None:
+    """The patch for this fleet. Another firm's patch does not move these cars."""
+    stored = stored_loiter(game)
+    if stored is None:
+        return None
+    firm, centre, radius = stored
+    if draw_as is None:
+        if firm == "":
+            return centre, radius
+        return None
+    if firm in FIRM_NAMES and draw_as == firm_key(game.username, firm):
+        return centre, radius
+    return None
+
+
+def loiter_spot(
+    username: str,
+    sign: str,
+    now: float,
+    centre: tuple[float, float],
+    radius_km: float,
+    taken: tuple[tuple[float, float], ...] = (),
+) -> tuple[float, float]:
+    """One seeded point inside the patch. A taken point uses the next draw."""
+    last = centre
+    for attempt in range(24):
+        salt = f"loiter-{sign}" if attempt == 0 else f"loiter-{sign}-{attempt}"
+        rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|{salt}"))
+        bearing = rng.random() * 360.0
+        miles = (radius_km * 0.98 * math.sqrt(rng.random())) / KM_PER_MILE
+        if miles < 0.02:
+            miles = 0.02
+        point = destination(centre, bearing, miles)
+        last = point
+        if not _inside_loiter(point, centre, radius_km) or _point_taken(point, taken):
+            continue
+        return point
+    number = int(sign[1:]) if len(sign) > 1 and sign[1:].isdigit() else 1
+    for step in range(36):
+        bearing = float((step * 37 + number * 17) % 360)
+        miles = max(0.02, (radius_km * 0.55) / KM_PER_MILE)
+        point = destination(centre, bearing, miles)
+        last = point
+        if _inside_loiter(point, centre, radius_km) and not _point_taken(point, taken):
+            return point
+    return last
+
+
+def public_loiter(game: EmpireGame | None) -> dict | None:
+    """The patch the feed carries. None until the player sets one."""
+    if game is None:
+        return None
+    stored = stored_loiter(game)
+    if stored is None:
+        return None
+    firm, centre, radius = stored
+    return {"firm": firm, "lat": centre[0], "lng": centre[1], "radius_km": radius}
+
+
 def strategic_spot(
     username: str,
     sign: str,
@@ -1207,6 +1297,7 @@ def _travel_to_a_better_spot(
     Another firm passes its own draw seed. The player's seed stays the bare username.
     """
     fleet_name = draw_as or game.username
+    patch = loiter_for_fleet(game, draw_as)
     people = _people(session, game.username)
     claimed = {person.sign: person for person in people if person.sign}
     cars = _fleet_cars(session, fleet_name) if draw_as else _cars(session, game.username)
@@ -1232,6 +1323,31 @@ def _travel_to_a_better_spot(
                 continue
             depot = car_depot(car)
             start = car_position(car, depot)
+            if patch is not None:
+                centre, radius = patch
+                if _inside_loiter(start, centre, radius) and not _point_taken(start, tuple(taken)):
+                    if float(car.hold_until) - float(car.leg_started) >= BREAK_S - 1:
+                        car.leg_started = now
+                        car.hold_until = now
+                        _store_job(car)
+                    taken.append(start)
+                    continue
+                spot = loiter_spot(fleet_name, car.sign, now, centre, radius, tuple(taken))
+                if not _inside_loiter(spot, centre, radius) or _point_taken(spot, tuple(taken)):
+                    continue
+                if _inside_loiter(start, centre, radius) and haversine_km(start, spot) <= 0.05:
+                    taken.append(start)
+                    continue
+                taken.append(spot)
+                car.passenger = ""
+                car.fare_name = ""
+                car.fare_lat = 0.0
+                car.fare_lng = 0.0
+                car.drop_lat = 0.0
+                car.drop_lng = 0.0
+                _begin(car, game, start, spot, now, "to_better_spot")
+                _store_job(car)
+                continue
             if car_takes_a_break(fleet_name, car.sign, now, len(people), free):
                 if haversine_km(start, depot) > 0.05:
                     car.passenger = ""
@@ -1368,6 +1484,47 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
         )
         session.commit()
         return "T11"
+    finally:
+        if own_session:
+            session.close()
+
+
+def set_loiter(
+    username: str,
+    lat: float,
+    lng: float,
+    radius_km: float,
+    firm: str = "",
+    now: float | None = None,
+    session: Session | None = None,
+) -> bool:
+    """Store the patch where that firm's idle taxis loiter. Cash and the cars stay."""
+    username = normalise_username(username)
+    firm_name = (firm or "").strip().lower()
+    if firm_name not in ("", *FIRM_NAMES):
+        return False
+    try:
+        centre = (float(lat), float(lng))
+        radius = float(radius_km)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(centre[0]) or not math.isfinite(centre[1]) or not math.isfinite(radius):
+        return False
+    if radius < LOITER_MIN_KM or radius > LOITER_MAX_KM or not inside_circle(centre):
+        return False
+    own_session = session is None
+    if session is None:
+        session = SessionLocal()
+    if now is None:
+        now = time.time()
+    try:
+        game = ensure_game(username, now, session)
+        game.loiter_firm = firm_name
+        game.loiter_lat = centre[0]
+        game.loiter_lng = centre[1]
+        game.loiter_km = radius
+        session.commit()
+        return True
     finally:
         if own_session:
             session.close()
@@ -1519,6 +1676,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "fares": fares,
             "people": people,
             "firms": firms,
+            "loiter": public_loiter(game),
             "fare_in": lines["fare_in"],
             "cash_pence": cash_pence,
             "driver_share": lines["driver_share"],
