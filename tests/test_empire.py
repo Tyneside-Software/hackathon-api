@@ -529,6 +529,28 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["standing"], 1500 * len(body["cars"]))
         self.assertIs(type(body["standing"]), int)
 
+    def test_ten_cars_standing_sum_to_minus_15000(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            body = empire.snapshot("ada", NOW, session)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(body["fuel"], 0)
+        day = body["fare_in"] - body["driver_share"] - body["fuel"] - body["standing"]
+        self.assertEqual(day, -15000)
+
+        def integers(value):
+            if type(value) is int:
+                yield value
+            elif isinstance(value, dict):
+                for item in value.values():
+                    yield from integers(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from integers(item)
+
+        self.assertNotIn(2860, list(integers(body)))
+
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
