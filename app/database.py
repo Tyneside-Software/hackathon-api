@@ -48,6 +48,21 @@ def normalise_username(username: str) -> str:
     return username.strip().lower()
 
 
+def ensure_empire_cash_column(bind=None) -> None:
+    """Add cash_pence to an existing empire_games table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_games" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_games")}
+    if "cash_pence" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_games ADD COLUMN cash_pence INTEGER NOT NULL DEFAULT 0"))
+
+
 def init_db() -> None:
     from . import models  # noqa: F401 — register tables
     from sqlalchemy import inspect, text
@@ -67,6 +82,7 @@ def init_db() -> None:
             if "nickname" not in link_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
+        ensure_empire_cash_column(engine)
     except Exception:
         pass
     try:
