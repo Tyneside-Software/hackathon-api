@@ -655,3 +655,16 @@ class EmpireCar(Base):
     hold_until: Mapped[float] = mapped_column(Float, default=0)
     next_check: Mapped[float] = mapped_column(Float, default=0)
     depart_offset: Mapped[float] = mapped_column(Float, default=0)
+
+
+class EmpirePerson(Base):
+    """A person waiting for a taxi. Not a device, and not a car."""
+
+    __tablename__ = "empire_people"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    lat: Mapped[float] = mapped_column(Float, default=0)
+    lng: Mapped[float] = mapped_column(Float, default=0)
+    sign: Mapped[str] = mapped_column(String(8), default="")
