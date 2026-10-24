@@ -2259,6 +2259,46 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual([car["sign"] for car in other["cars"]], [f"T{number}" for number in range(1, 11)])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_a_tick_does_not_add_a_car_because_a_person_appeared(self) -> None:
+        opening = [f"T{number}" for number in range(1, 11)]
+        with self.Session() as session:
+            empire.ensure_game("stayten", NOW, session)
+            empire.ensure_game("staytwo", NOW, session)
+            before = empire.snapshot("stayten", NOW, session)
+            other_before = empire.snapshot("staytwo", NOW, session)
+            self.assertEqual(before["people"], [])
+            self.assertEqual(other_before["people"], [])
+            self.assertEqual([car["sign"] for car in before["cars"]], opening)
+            self.assertEqual([car["sign"] for car in other_before["cars"]], opening)
+            empire.tick_all(NOW + 1, session)
+            after = empire.snapshot("stayten", NOW + 1, session)
+            other = empire.snapshot("staytwo", NOW + 1, session)
+            self.assertEqual(len(after["people"]), 1)
+            self.assertEqual(len(other["people"]), 1)
+            self.assertEqual(after["people"][0]["sign"], "")
+            self.assertEqual(other["people"][0]["sign"], "")
+            self.assertEqual([car["sign"] for car in after["cars"]], opening)
+            self.assertEqual([car["sign"] for car in other["cars"]], opening)
+            self.assertNotIn("T11", [car["sign"] for car in after["cars"]])
+            self.assertNotIn("T12", [car["sign"] for car in after["cars"]])
+            empire.tick_all(NOW + 2, session)
+            later = empire.snapshot("stayten", NOW + 2, session)
+            self.assertEqual(len(later["people"]), 1)
+            self.assertEqual([car["sign"] for car in later["cars"]], opening)
+        with self.Session() as session:
+            empire.ensure_game("staybuy", NOW, session)
+            self.assertEqual(empire.buy_car("staybuy", 800000, NOW, session), "T11")
+            bought = empire.snapshot("staybuy", NOW, session)
+            self.assertEqual(bought["people"], [])
+            self.assertEqual([car["sign"] for car in bought["cars"]], opening + ["T11"])
+            empire.tick_all(NOW + 1, session)
+            after_buy = empire.snapshot("staybuy", NOW + 1, session)
+            self.assertEqual(len(after_buy["people"]), 1)
+            self.assertEqual(after_buy["people"][0]["sign"], "")
+            self.assertEqual([car["sign"] for car in after_buy["cars"]], opening + ["T11"])
+            self.assertNotIn("T12", [car["sign"] for car in after_buy["cars"]])
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
         live = ROOT / "hackathon.db"
         before = live.stat().st_mtime if live.exists() else None
