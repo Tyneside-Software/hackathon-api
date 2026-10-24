@@ -441,6 +441,27 @@ def pay_new_car(car: EmpireCar, pence: int) -> bool:
     return True
 
 
+def route_miles(route: list) -> float:
+    total = 0.0
+    for index in range(len(route) - 1):
+        start = (float(route[index][0]), float(route[index][1]))
+        end = (float(route[index + 1][0]), float(route[index + 1][1]))
+        total += haversine_km(start, end) / KM_PER_MILE
+    return total
+
+
+def driven_miles(car: EmpireCar, now: float) -> float:
+    """Miles along the current leg. Standing does not use this figure."""
+    if car.status == "at_depot":
+        return 0.0
+    route = _loads(car.route_json, [])
+    if len(route) < 2 or car.duration_s <= 0:
+        return 0.0
+    elapsed = max(0.0, float(now) - float(car.leg_started))
+    fraction = min(1.0, elapsed / float(car.duration_s))
+    return route_miles(route) * fraction
+
+
 def money_lines(car_count: int, fare_in: int = 0, miles: float = 0.0) -> dict[str, int]:
     """In-game money for one account. Integer pence. No company totals."""
     fare = int(fare_in)
@@ -495,7 +516,8 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                         "sign": car.sign,
                     }
                 )
-        lines = money_lines(len(cars))
+        miles = sum(driven_miles(car, now) for car in cars)
+        lines = money_lines(len(cars), miles=miles)
         return {
             "ok": True,
             "username": username,
