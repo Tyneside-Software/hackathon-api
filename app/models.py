@@ -616,3 +616,41 @@ class BoardMeta(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class EmpireGame(Base):
+    """One account's fleet. Game rows are never devices."""
+
+    __tablename__ = "empire_games"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[str] = mapped_column(String(64), default="")
+    name_index: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class EmpireCar(Base):
+    """One taxi on an account fleet. No device_id."""
+
+    __tablename__ = "empire_cars"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(64), index=True)
+    sign: Mapped[str] = mapped_column(String(8))
+    colour: Mapped[str] = mapped_column(String(16), default="")
+    status: Mapped[str] = mapped_column(String(32), default="at_depot")
+    passenger: Mapped[str] = mapped_column(String(64), default="")
+    lat: Mapped[float] = mapped_column(Float, default=0)
+    lng: Mapped[float] = mapped_column(Float, default=0)
+    route_json: Mapped[str] = mapped_column(Text, default="[]")
+    duration_s: Mapped[float] = mapped_column(Float, default=0)
+    leg_started: Mapped[float] = mapped_column(Float, default=0)
+    osrm: Mapped[bool] = mapped_column(Boolean, default=False)
+    trail_json: Mapped[str] = mapped_column(Text, default="[]")
+    fare_name: Mapped[str] = mapped_column(String(64), default="")
+    fare_lat: Mapped[float] = mapped_column(Float, default=0)
+    fare_lng: Mapped[float] = mapped_column(Float, default=0)
+    drop_lat: Mapped[float] = mapped_column(Float, default=0)
+    drop_lng: Mapped[float] = mapped_column(Float, default=0)
+    hold_until: Mapped[float] = mapped_column(Float, default=0)
+    next_check: Mapped[float] = mapped_column(Float, default=0)
+    depart_offset: Mapped[float] = mapped_column(Float, default=0)
