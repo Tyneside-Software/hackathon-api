@@ -161,6 +161,27 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertFalse(body["osrm_unavailable"] is False and car["status"] != "to_passenger")
         self.assertTrue(body["osrm_unavailable"])
 
+    def test_missed_osrm_leg_is_30_mph_for_each_of_the_ten(self) -> None:
+        empire.set_route_fn(lambda start, end: None)
+        self.assertEqual(empire.MPH, 30.0)
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertTrue(body["osrm_unavailable"])
+        self.assertEqual(len(body["cars"]), 10)
+        for index in range(1, 11):
+            car = self._car(body, f"T{index}")
+            self.assertEqual(car["status"], "to_passenger")
+            self.assertFalse(car["osrm"])
+            self.assertEqual(len(car["route"]), 2)
+            start = (car["route"][0][0], car["route"][0][1])
+            end = (car["route"][1][0], car["route"][1][1])
+            miles = empire.haversine_km(start, end) / empire.KM_PER_MILE
+            if miles < 0.001:
+                miles = 0.001
+            self.assertAlmostEqual(car["duration_s"], miles / 30.0 * 3600.0, places=3)
+
     def test_drop_off_returns_to_the_depot_then_waits_four_seconds(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
