@@ -1,17 +1,22 @@
-"""Account fleet tables. Game rows are never devices."""
+"""Account fleet. Game rows are never devices, and tests never open the live database."""
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+_fd, TEMP_DB = tempfile.mkstemp(prefix="empire-test-", suffix=".db")
+os.close(_fd)
+os.environ["DATABASE_URL"] = "sqlite:///" + TEMP_DB.replace("\\", "/")
 sys.path.insert(0, str(ROOT))
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, select
 
-from app.database import Base
-from app.models import Device, DeviceLink, LocationPing  # noqa: F401 — register tables
+from app.database import Base, SessionLocal
+from app.models import Device, DeviceLink, EmpireCar, LocationPing  # noqa: F401
 
 
 class EmpireTableTests(unittest.TestCase):
@@ -29,6 +34,27 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("device_id", device_columns)
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("location_pings")})
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("device_links")})
+
+
+class EmpireRegisterTests(unittest.TestCase):
+    def test_register_creates_three_cars_at_the_depot(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            created = client.post("/register", json={"username": "Ada", "password": "password1"})
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.json()["username"], "ada")
+        with SessionLocal() as session:
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+        self.assertEqual([car.sign for car in cars], ["T1", "T2", "T3"])
+        for car in cars:
+            self.assertEqual(car.status, "at_depot")
+            self.assertAlmostEqual(car.lat, 55.0367, places=4)
+            self.assertAlmostEqual(car.lng, -1.5075, places=4)
+        live = ROOT / "hackathon.db"
+        self.assertNotEqual(Path(TEMP_DB).resolve(), live.resolve())
 
 
 if __name__ == "__main__":
