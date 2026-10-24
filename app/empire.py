@@ -386,6 +386,22 @@ DAY_PLACES = (
     "Grey's Monument",
     "Central Station",
 )
+COAST = (
+    "Whitley Bay",
+    "Spanish City",
+    "Cullercoats",
+    "Tynemouth",
+    "North Shields",
+)
+TOWN = (
+    "Grey's Monument",
+    "Central Station",
+    "Haymarket",
+    "the Quayside",
+    "Osborne Road",
+)
+EVENING_PICKUPS = ("Cobalt",) + TOWN
+EVENING_DROPS = HOMES + COAST
 
 
 def place_point(name: str) -> tuple[float, float]:
@@ -433,6 +449,12 @@ def is_day(now: float) -> bool:
     return 9 * 60 + 30 <= minutes < 16 * 60 + 30
 
 
+def is_evening(now: float) -> bool:
+    hour, minute = london_clock(now)
+    minutes = hour * 60 + minute
+    return 16 * 60 + 30 <= minutes < 19 * 60 + 30
+
+
 def journey_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
     """Pickup and drop are two places. They are not a ring around the depot."""
     index = raw_bearing(username) % len(PLACES)
@@ -453,11 +475,22 @@ def day_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
     return place_point(DAY_PLACES[index]), place_point(DAY_PLACES[(index + 5) % len(DAY_PLACES)])
 
 
+def evening_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Cobalt and town back to the homes and the coast."""
+    index = raw_bearing(username)
+    return (
+        place_point(EVENING_PICKUPS[index % len(EVENING_PICKUPS)]),
+        place_point(EVENING_DROPS[index % len(EVENING_DROPS)]),
+    )
+
+
 def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
     if is_morning(now):
         pickup, drop = morning_ends(car.username)
     elif is_day(now):
         pickup, drop = day_ends(car.username)
+    elif is_evening(now):
+        pickup, drop = evening_ends(car.username)
     else:
         pickup, drop = journey_ends(car.username)
     name = _next_name(game)
