@@ -53,7 +53,8 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(created.json()["username"], "clerk")
         with SessionLocal() as session:
             cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "clerk")).all())
-        self.assertEqual([car.sign for car in cars], ["T1", "T2", "T3"])
+        signs = sorted((car.sign for car in cars), key=lambda sign: int(sign[1:]))
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
         for car in cars:
             self.assertEqual(car.status, "at_depot")
             self.assertAlmostEqual(car.lat, 55.0367, places=4)
@@ -92,6 +93,16 @@ class EmpireFleetTests(unittest.TestCase):
 
     def _car(self, body: dict, sign: str) -> dict:
         return next(car for car in body["cars"] if car["sign"] == sign)
+
+    def test_fleet_starts_with_ten_cars_at_the_depot(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ten", NOW, session)
+            body = empire.snapshot("ten", NOW, session)
+        self.assertEqual([car["sign"] for car in body["cars"]], [f"T{index}" for index in range(1, 11)])
+        for car in body["cars"]:
+            self.assertEqual(car["status"], "at_depot")
+            self.assertAlmostEqual(car["lat"], 55.0367, places=4)
+            self.assertAlmostEqual(car["lng"], -1.5075, places=4)
 
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
@@ -178,7 +189,7 @@ class EmpireFleetTests(unittest.TestCase):
             token = client.post("/login", json={"username": "ada", "password": "password1"}).json()["access_token"]
             body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
         self.assertEqual(body["username"], "ada")
-        self.assertEqual(len(body["cars"]), 3)
+        self.assertEqual(len(body["cars"]), 10)
         self.assertNotIn("bee", {car.get("passenger") for car in body["cars"]})
 
     def test_two_feeds_do_not_share_fare_coordinates(self) -> None:
@@ -362,8 +373,11 @@ class EmpireFleetTests(unittest.TestCase):
         with Session() as first:
             empire.ensure_game("ada", NOW, first)
         with Session() as second:
-            signs = [car.sign for car in second.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()]
-        self.assertEqual(signs, ["T1", "T2", "T3"])
+            signs = sorted(
+                (car.sign for car in second.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()),
+                key=lambda sign: int(sign[1:]),
+            )
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
         self.assertNotEqual(path.resolve(), (ROOT / "hackathon.db").resolve())
         engine.dispose()
 
@@ -382,14 +396,17 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(client.get("/v1/empire").status_code, 401)
             body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
         self.assertEqual(body["username"], "oldaccount")
-        self.assertEqual([car["sign"] for car in body["cars"]], ["T1", "T2", "T3"])
+        self.assertEqual([car["sign"] for car in body["cars"]], [f"T{index}" for index in range(1, 11)])
 
     def test_feed_colours(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
             body = empire.snapshot("ada", NOW, session)
         colours = {car["sign"]: car["colour"] for car in body["cars"]}
-        self.assertEqual(colours, {"T1": "#f5b942", "T2": "#38bdf8", "T3": "#4ade80"})
+        self.assertEqual(colours["T1"], "#f5b942")
+        self.assertEqual(colours["T2"], "#38bdf8")
+        self.assertEqual(colours["T3"], "#4ade80")
+        self.assertEqual(len(colours), 10)
 
     def test_position_is_the_fraction_of_the_route(self) -> None:
         route = [[55.0, -1.5], [55.2, -1.5], [55.4, -1.5]]
@@ -432,17 +449,22 @@ class EmpireFleetTests(unittest.TestCase):
     def test_three_cars_can_hold_three_statuses(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
-            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada").order_by(EmpireCar.sign)).all())
-            cars[0].status = "to_passenger"
-            cars[0].fare_name = "Mina"
-            cars[0].passenger = "Mina"
-            cars[1].status = "with_passenger"
-            cars[1].passenger = "Owen"
-            cars[2].status = "returning"
+            cars = {car.sign: car for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()}
+            cars["T1"].status = "to_passenger"
+            cars["T1"].fare_name = "Mina"
+            cars["T1"].passenger = "Mina"
+            cars["T2"].status = "with_passenger"
+            cars["T2"].passenger = "Owen"
+            cars["T3"].status = "returning"
             session.commit()
             body = empire.snapshot("ada", NOW, session)
         statuses = {car["sign"]: car["status"] for car in body["cars"]}
-        self.assertEqual(statuses, {"T1": "to_passenger", "T2": "with_passenger", "T3": "returning"})
+        self.assertEqual(statuses["T1"], "to_passenger")
+        self.assertEqual(statuses["T2"], "with_passenger")
+        self.assertEqual(statuses["T3"], "returning")
+        for sign, status in statuses.items():
+            if sign not in {"T1", "T2", "T3"}:
+                self.assertEqual(status, "at_depot", sign)
 
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
