@@ -462,6 +462,19 @@ class EmpireFleetTests(unittest.TestCase):
                     seen.append(fares[0]["name"])
         self.assertEqual(seen[:6], ["Mina", "Owen", "Priya", "Jack", "Helen", "Tom"])
 
+    def test_ten_car_names_cycle_mina_through_tom(self) -> None:
+        cycle = ("Mina", "Owen", "Priya", "Jack", "Helen", "Tom")
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertEqual(len(body["cars"]), 10)
+        names = [self._car(body, f"T{index}")["passenger"] for index in range(1, 11)]
+        self.assertEqual(names, [cycle[(index - 1) % len(cycle)] for index in range(1, 11)])
+        self.assertEqual(names[0], "Mina")
+        self.assertEqual(names[5], "Tom")
+        self.assertEqual(names[6], "Mina")
+
     def test_depot_car_still_has_a_position(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
