@@ -211,6 +211,31 @@ class EmpireFleetTests(unittest.TestCase):
             body = empire.snapshot("ada", home + 5, session)
             self.assertEqual(self._car(body, "T1")["status"], "to_passenger")
 
+    def test_each_of_the_ten_waits_four_seconds(self) -> None:
+        self.assertEqual(empire.DEPOT_PAUSE_S, 4)
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for car in cars:
+                car.status = "returning"
+                car.route_json = "[[55.0367, -1.5075], [55.0367, -1.5075]]"
+                car.duration_s = 10
+                car.leg_started = NOW
+                car.hold_until = NOW
+            session.commit()
+            empire.tick_all(NOW + 10, session)
+            arrived = empire.snapshot("ada", NOW + 10, session)
+            empire.tick_all(NOW + 13, session)
+            waiting = empire.snapshot("ada", NOW + 13, session)
+            empire.tick_all(NOW + 14, session)
+            left = empire.snapshot("ada", NOW + 14, session)
+        for index in range(1, 11):
+            sign = f"T{index}"
+            self.assertEqual(self._car(arrived, sign)["status"], "at_depot")
+            self.assertEqual(self._car(waiting, sign)["status"], "at_depot")
+            self.assertEqual(self._car(left, sign)["status"], "to_passenger")
+
     def test_feed_is_one_account_and_needs_a_token(self) -> None:
         from fastapi.testclient import TestClient
 
