@@ -448,6 +448,17 @@ def place_point(name: str) -> tuple[float, float]:
     raise KeyError(name)
 
 
+def place_name(point: tuple[float, float]) -> str:
+    """The published place this coordinate already is. No second table."""
+    key = (round(float(point[0]), 5), round(float(point[1]), 5))
+    for name, lat, lng in PLACES:
+        if (round(lat, 5), round(lng, 5)) == key:
+            return name
+    if haversine_km((float(point[0]), float(point[1])), DEPOT) <= 0.3:
+        return "Shiremoor"
+    return ""
+
+
 def _last_sunday(year: int, month: int) -> datetime:
     if month == 12:
         day = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
@@ -1254,6 +1265,9 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                     "leg_started": car.leg_started,
                     "osrm": bool(car.osrm),
                     "trail": trail,
+                    "destination": place_name((float(route[-1][0]), float(route[-1][1])))
+                    if len(route) >= 2
+                    else place_name((float(car.lat), float(car.lng))),
                 }
             )
             if car.status == "to_passenger" and car.fare_name:
