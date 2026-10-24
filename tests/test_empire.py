@@ -403,6 +403,35 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertGreaterEqual(point[2], NOW - 600)
             self.assertNotEqual(point[2], NOW - 601)
 
+    def test_ten_car_trail_point_is_longitude_then_latitude(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for index, car in enumerate(sorted(cars, key=lambda item: int(item.sign[1:])), start=1):
+                car.status = "to_passenger"
+                car.lat = 55.0 + index * 0.01
+                car.lng = -1.5 - index * 0.01
+                car.route_json = "[]"
+                car.duration_s = 10000
+                car.leg_started = NOW
+                car.hold_until = NOW + 10000
+                car.next_check = NOW
+                car.trail_json = "[]"
+            session.commit()
+            empire.tick_all(NOW, session)
+            body = empire.snapshot("ada", NOW, session)
+        for index in range(1, 11):
+            car = self._car(body, f"T{index}")
+            self.assertEqual(len(car["trail"]), 1)
+            lng, lat, stamp = car["trail"][0]
+            self.assertAlmostEqual(lng, -1.5 - index * 0.01, places=5)
+            self.assertAlmostEqual(lat, 55.0 + index * 0.01, places=5)
+            self.assertAlmostEqual(lng, car["lng"], places=5)
+            self.assertAlmostEqual(lat, car["lat"], places=5)
+            self.assertNotAlmostEqual(lng, lat, places=3)
+            self.assertEqual(stamp, NOW)
+
     def test_health_version_is_0_1_27(self) -> None:
         from app.config import VERSION
         from app.routers.health import health
