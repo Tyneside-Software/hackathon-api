@@ -441,6 +441,51 @@ def pay_new_car(car: EmpireCar, pence: int) -> bool:
     return True
 
 
+def buy_car(username: str, pence: int, now: float | None = None, session: Session | None = None) -> str | None:
+    """Spend 800000 pence to add T11. A smaller payment adds nothing."""
+    if not new_car_may_leave(pence):
+        return None
+    username = normalise_username(username)
+    own_session = session is None
+    if session is None:
+        session = SessionLocal()
+    if now is None:
+        now = time.time()
+    try:
+        ensure_game(username, now, session)
+        existing = next((car for car in _cars(session, username) if car.sign == "T11"), None)
+        if existing is not None:
+            if existing.depart_offset < 0:
+                existing.depart_offset = 0
+                session.commit()
+            return "T11"
+        session.add(
+            EmpireCar(
+                username=username,
+                sign="T11",
+                colour="#2dd4bf",
+                status="at_depot",
+                passenger="",
+                lat=DEPOT[0],
+                lng=DEPOT[1],
+                route_json="[]",
+                duration_s=0,
+                leg_started=now,
+                osrm=False,
+                trail_json="[]",
+                fare_name="",
+                hold_until=now,
+                next_check=now + CHECK_S,
+                depart_offset=0,
+            )
+        )
+        session.commit()
+        return "T11"
+    finally:
+        if own_session:
+            session.close()
+
+
 def route_miles(route: list) -> float:
     total = 0.0
     for index in range(len(route) - 1):
