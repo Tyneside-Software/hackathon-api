@@ -600,6 +600,27 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["new_car"], 800000)
         self.assertEqual(empire.NEW_CAR_PENCE, 800000)
 
+    def test_bought_car_first_fare_stays_inside_the_circle(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            added = empire.buy_car("ada", 800000, NOW, session)
+            empire.tick_all(NOW + 1, session)
+            car = session.scalar(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11"))
+            stored = [row.sign for row in session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()]
+        self.assertEqual(added, "T11")
+        self.assertIsNotNone(car)
+        pickup = (car.fare_lat, car.fare_lng)
+        drop = (car.drop_lat, car.drop_lng)
+        pickup_miles = empire.haversine_km(empire.DEPOT, pickup) / empire.KM_PER_MILE
+        drop_miles = empire.haversine_km(empire.DEPOT, drop) / empire.KM_PER_MILE
+        self.assertEqual(car.status, "to_passenger")
+        self.assertAlmostEqual(pickup_miles, 1.2, delta=0.05)
+        self.assertGreater(drop_miles, pickup_miles)
+        self.assertTrue(empire.inside_circle(pickup))
+        self.assertTrue(empire.inside_circle(drop))
+        self.assertEqual(sorted(stored, key=lambda sign: int(sign[1:])), [f"T{index}" for index in range(1, 12)])
+        self.assertNotIn("T12", stored)
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
