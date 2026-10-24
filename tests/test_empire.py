@@ -1888,9 +1888,79 @@ class EmpireFleetTests(unittest.TestCase):
         _status, early_pickup, early_drop, _count = ends_at("daymorn", before)
         self.assertEqual((early_pickup, early_drop), empire.morning_ends("daymorn"))
         _status, edge_pickup, edge_drop, _count = ends_at("dayafter", edge)
-        self.assertEqual((edge_pickup, edge_drop), empire.journey_ends("dayafter"))
+        self.assertEqual((edge_pickup, edge_drop), empire.evening_ends("dayafter"))
         _status, summer_pickup, summer_drop, _count = ends_at("dayevening", summer_edge)
-        self.assertEqual((summer_pickup, summer_drop), empire.journey_ends("dayevening"))
+        self.assertEqual((summer_pickup, summer_drop), empire.evening_ends("dayevening"))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_evening_journey_runs_from_town_back_to_the_homes(self) -> None:
+        pickups = {empire.place_point(name) for name in empire.EVENING_PICKUPS}
+        drops = {empire.place_point(name) for name in empire.EVENING_DROPS}
+        self.assertTrue(set(empire.EVENING_PICKUPS).isdisjoint(empire.EVENING_DROPS))
+        self.assertEqual(empire.EVENING_PICKUPS, ("Cobalt",) + empire.TOWN)
+        self.assertEqual(empire.EVENING_DROPS, empire.HOMES + empire.COAST)
+        name = None
+        for index in range(80):
+            candidate = f"eve{index}"
+            if empire.evening_ends(candidate) != empire.journey_ends(candidate):
+                name = candidate
+                break
+        self.assertIsNotNone(name)
+        opening = datetime(2023, 11, 15, 16, 30, tzinfo=timezone.utc).timestamp()
+        middle = datetime(2023, 11, 15, 18, 0, tzinfo=timezone.utc).timestamp()
+        late = datetime(2023, 11, 15, 19, 29, tzinfo=timezone.utc).timestamp()
+        summer = datetime(2024, 7, 15, 15, 30, tzinfo=timezone.utc).timestamp()
+        summer_late = datetime(2024, 7, 15, 18, 29, tzinfo=timezone.utc).timestamp()
+        before = datetime(2023, 11, 15, 16, 29, tzinfo=timezone.utc).timestamp()
+        edge = datetime(2023, 11, 15, 19, 30, tzinfo=timezone.utc).timestamp()
+        summer_edge = datetime(2024, 7, 15, 18, 30, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(empire.london_clock(summer), (16, 30))
+        self.assertEqual(empire.london_clock(summer_late), (19, 29))
+        self.assertEqual(empire.london_clock(summer_edge), (19, 30))
+        self.assertTrue(empire.is_evening(opening))
+        self.assertTrue(empire.is_evening(middle))
+        self.assertTrue(empire.is_evening(late))
+        self.assertTrue(empire.is_evening(summer))
+        self.assertTrue(empire.is_evening(summer_late))
+        self.assertFalse(empire.is_evening(before))
+        self.assertFalse(empire.is_evening(edge))
+        self.assertFalse(empire.is_evening(summer_edge))
+        self.assertTrue(empire.is_day(before))
+
+        def ends_at(account: str, stamp: float) -> tuple[str, tuple[float, float], tuple[float, float], int]:
+            engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+            Base.metadata.create_all(engine)
+            Session = sessionmaker(bind=engine, expire_on_commit=False)
+            with Session() as session:
+                empire.ensure_game(account, stamp, session)
+                empire.tick_all(stamp + 1, session)
+                rows = list(session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all())
+                car = next(row for row in rows if row.sign == "T1")
+                return car.status, (car.fare_lat, car.fare_lng), (car.drop_lat, car.drop_lng), len(rows)
+
+        for stamp, account in (
+            (opening, name),
+            (middle, "evemid"),
+            (late, "evelate"),
+            (summer, "evesummer"),
+            (summer_late, "evebst"),
+        ):
+            status, pickup, drop, count = ends_at(account, stamp)
+            self.assertEqual(status, "to_passenger", account)
+            self.assertEqual(count, 10, account)
+            self.assertIn(pickup, pickups, account)
+            self.assertIn(drop, drops, account)
+            self.assertEqual((pickup, drop), empire.evening_ends(account), account)
+            self.assertTrue(empire.inside_circle(pickup), account)
+            self.assertTrue(empire.inside_circle(drop), account)
+            if account == name:
+                self.assertNotEqual((pickup, drop), empire.journey_ends(account), account)
+        _status, early_pickup, early_drop, _count = ends_at("eveday", before)
+        self.assertEqual((early_pickup, early_drop), empire.day_ends("eveday"))
+        _status, edge_pickup, edge_drop, _count = ends_at("evenight", edge)
+        self.assertEqual((edge_pickup, edge_drop), empire.journey_ends("evenight"))
+        _status, summer_pickup, summer_drop, _count = ends_at("eveafter", summer_edge)
+        self.assertEqual((summer_pickup, summer_drop), empire.journey_ends("eveafter"))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
