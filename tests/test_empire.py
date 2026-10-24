@@ -903,6 +903,34 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertFalse(hit["osrm_unavailable"])
         self.assertTrue(self._car(hit, "T1")["osrm"])
 
+    def test_osrm_unavailable_is_true_when_any_of_the_ten_missed(self) -> None:
+        def answered(start, end):
+            return {"points": [[start[0], start[1]], [end[0], end[1]]], "duration_s": 80}
+
+        empire.set_route_fn(answered)
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            hit = empire.snapshot("ada", NOW + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            missed = next(car for car in cars if car.sign == "T4")
+            missed.osrm = False
+            session.commit()
+            mixed = empire.snapshot("ada", NOW + 64, session)
+        self.assertEqual(len(hit["cars"]), 10)
+        self.assertFalse(hit["osrm_unavailable"])
+        for index in range(1, 11):
+            car = self._car(hit, f"T{index}")
+            self.assertEqual(car["status"], "to_passenger")
+            self.assertTrue(car["osrm"])
+        self.assertTrue(mixed["osrm_unavailable"])
+        self.assertFalse(self._car(mixed, "T4")["osrm"])
+        for index in range(1, 11):
+            if index == 4:
+                continue
+            self.assertTrue(self._car(mixed, f"T{index}")["osrm"])
+
     def test_a_leaving_leg_starts_at_the_depot(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
