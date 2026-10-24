@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import math
 import os
 import sys
 import tempfile
@@ -34,6 +35,20 @@ def _ring(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
         empire.destination(empire.DEPOT, bearing, 1.2),
         empire.destination(empire.DEPOT, bearing, 3.0),
     )
+
+
+def _depot_bearing(point: tuple[float, float]) -> float:
+    lat1 = math.radians(empire.DEPOT[0])
+    lat2 = math.radians(point[0])
+    dlng = math.radians(point[1] - empire.DEPOT[1])
+    east = math.sin(dlng) * math.cos(lat2)
+    north = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlng)
+    return math.degrees(math.atan2(east, north)) % 360
+
+
+def _bearing_gap(left: float, right: float) -> float:
+    gap = abs(left - right) % 360
+    return min(gap, 360 - gap)
 
 
 class EmpireTableTests(unittest.TestCase):
@@ -2076,6 +2091,89 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual((early_pickup, early_drop), empire.evening_ends("niteprev"))
         _status, edge_pickup, edge_drop = fleet("niteone", edge, edge + 1)["T1"]
         self.assertEqual((edge_pickup, edge_drop), empire.journey_ends("niteone"))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_drop_is_the_other_end_and_not_one_depot_bearing(self) -> None:
+        places = {(lat, lng) for _name, lat, lng in empire.PLACES}
+        ring_pickup, ring_drop = _ring("ada")
+        self.assertLess(_bearing_gap(_depot_bearing(ring_pickup), _depot_bearing(ring_drop)), 0.05)
+        found: dict[int, str] = {}
+        number = 0
+        while len(found) < 360:
+            candidate = f"end{number}"
+            found.setdefault(empire.raw_bearing(candidate), candidate)
+            number += 1
+            self.assertLess(number, 20000)
+        for name in found.values():
+            ring = _ring(name)
+            ends = (
+                empire.morning_ends(name),
+                empire.day_ends(name),
+                empire.evening_ends(name),
+                empire.night_ends(name),
+                empire.journey_ends(name),
+                empire.airport_ends(name),
+            )
+            for pickup, drop in ends:
+                self.assertNotEqual(pickup, drop, name)
+                self.assertGreater(_bearing_gap(_depot_bearing(pickup), _depot_bearing(drop)), 0.5, name)
+                self.assertNotIn(pickup, ring, name)
+                self.assertNotIn(drop, ring, name)
+                self.assertIn(pickup, places, name)
+                self.assertIn(drop, places, name)
+                self.assertNotEqual(pickup, empire.BERWICK, name)
+                self.assertNotEqual(drop, empire.BERWICK, name)
+        hours = (
+            (datetime(2023, 11, 15, 8, 0, tzinfo=timezone.utc).timestamp(), "morning"),
+            (DAY, "day"),
+            (datetime(2023, 11, 15, 17, 0, tzinfo=timezone.utc).timestamp(), "evening"),
+            (NOW, "night"),
+            (datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp(), "journey"),
+        )
+        for stamp, label in hours:
+            engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+            Base.metadata.create_all(engine)
+            Session = sessionmaker(bind=engine, expire_on_commit=False)
+            with Session() as session:
+                empire.ensure_game("otherend", stamp, session)
+                empire.tick_all(stamp + 64, session)
+                cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "otherend")).all())
+            self.assertEqual({car.sign for car in cars}, {f"T{sign}" for sign in range(1, 11)}, label)
+            ring = _ring("otherend")
+            moving = 0
+            for car in cars:
+                if car.status == "at_depot":
+                    continue
+                moving += 1
+                pickup = (car.fare_lat, car.fare_lng)
+                drop = (car.drop_lat, car.drop_lng)
+                if empire.airport_sign(car.sign):
+                    expected = empire.airport_ends("otherend")
+                elif label == "morning":
+                    expected = empire.morning_ends("otherend")
+                elif label == "day":
+                    expected = empire.day_ends("otherend")
+                elif label == "evening":
+                    expected = empire.evening_ends("otherend")
+                elif label == "night":
+                    expected = empire.night_ends("otherend")
+                else:
+                    expected = empire.journey_ends("otherend")
+                self.assertEqual((pickup, drop), expected, (label, car.sign))
+                self.assertNotEqual(pickup, drop, (label, car.sign))
+                self.assertGreater(
+                    _bearing_gap(_depot_bearing(pickup), _depot_bearing(drop)),
+                    0.5,
+                    (label, car.sign),
+                )
+                self.assertNotEqual(pickup, ring[0], (label, car.sign))
+                self.assertNotEqual(drop, ring[1], (label, car.sign))
+                self.assertTrue(empire.inside_circle(pickup), (label, car.sign))
+                self.assertTrue(empire.inside_circle(drop), (label, car.sign))
+            if label == "night":
+                self.assertLess(moving, 10, label)
+            else:
+                self.assertEqual(moving, 10, label)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
