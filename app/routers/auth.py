@@ -38,7 +38,7 @@ def register(payload: UserCreate) -> UserPublic:
         if User.get_by_email(email):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     try:
-        return User.create(payload).public()
+        user = User.create(payload)
     except UserExistsError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered")
     except PersistError:
@@ -46,6 +46,10 @@ def register(payload: UserCreate) -> UserPublic:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not store user",
         )
+    from ..empire import ensure_game
+
+    ensure_game(user.username)
+    return user.public()
 
 
 @router.post("/token", response_model=Token)
