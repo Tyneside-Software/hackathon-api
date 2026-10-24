@@ -308,6 +308,25 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(after["fare_in"], before["fare_in"])
         self.assertEqual(after["new_car"], 800000)
 
+    def test_bought_car_is_not_a_device(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            before_devices = session.scalar(select(func.count()).select_from(Device))
+            added = empire.buy_car("ada", 800000, NOW, session)
+            devices = session.scalar(select(func.count()).select_from(Device))
+            links = session.scalar(select(func.count()).select_from(DeviceLink))
+            pings = session.scalar(select(func.count()).select_from(LocationPing))
+            bought = session.scalar(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11"))
+        self.assertEqual(added, "T11")
+        self.assertEqual(before_devices, 0)
+        self.assertEqual(devices, 0)
+        self.assertEqual(links, 0)
+        self.assertEqual(pings, 0)
+        self.assertIsNotNone(bought)
+        self.assertEqual(bought.sign, "T11")
+        self.assertNotIn("device_id", EmpireCar.__table__.columns.keys())
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
