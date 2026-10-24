@@ -101,6 +101,21 @@ def ensure_empire_loiter_columns(bind=None) -> None:
             conn.execute(text(f"ALTER TABLE empire_games ADD COLUMN {name} {wanted[name]}"))
 
 
+def ensure_empire_bookings_column(bind=None) -> None:
+    """Add firm_bookings to an existing empire_games table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_games" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_games")}
+    if "firm_bookings" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_games ADD COLUMN firm_bookings TEXT NOT NULL DEFAULT '[]'"))
+
+
 def ensure_empire_cash_column(bind=None) -> None:
     """Add cash_pence to an existing empire_games table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -208,6 +223,7 @@ def init_db() -> None:
         ensure_empire_fare_column(engine)
         ensure_empire_miles_column(engine)
         ensure_empire_loiter_columns(engine)
+        ensure_empire_bookings_column(engine)
         ensure_empire_job_column(engine)
         ensure_empire_firm_columns(engine)
         ensure_empire_person_drop_columns(engine)
