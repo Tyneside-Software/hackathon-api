@@ -403,10 +403,21 @@ class EmpireFleetTests(unittest.TestCase):
             empire.ensure_game("ada", NOW, session)
             body = empire.snapshot("ada", NOW, session)
         colours = {car["sign"]: car["colour"] for car in body["cars"]}
-        self.assertEqual(colours["T1"], "#f5b942")
-        self.assertEqual(colours["T2"], "#38bdf8")
-        self.assertEqual(colours["T3"], "#4ade80")
-        self.assertEqual(len(colours), 10)
+        self.assertEqual(
+            colours,
+            {
+                "T1": "#f5b942",
+                "T2": "#38bdf8",
+                "T3": "#4ade80",
+                "T4": "#c084fc",
+                "T5": "#fb7185",
+                "T6": "#f97316",
+                "T7": "#a3e635",
+                "T8": "#22d3ee",
+                "T9": "#e879f9",
+                "T10": "#facc15",
+            },
+        )
 
     def test_position_is_the_fraction_of_the_route(self) -> None:
         route = [[55.0, -1.5], [55.2, -1.5], [55.4, -1.5]]
