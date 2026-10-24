@@ -283,6 +283,31 @@ class EmpireFleetTests(unittest.TestCase):
         for car in body["cars"]:
             self.assertNotEqual(car["sign"], "T11")
 
+    def test_buying_a_car_leaves_fuel_and_standing_unchanged(self) -> None:
+        fuel_rate = empire.FUEL_PENCE_PER_MILE
+        standing_rate = empire.STANDING_PENCE
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            before = empire.snapshot("ada", NOW, session)
+            added = empire.buy_car("ada", 800000, NOW, session)
+            after = empire.snapshot("ada", NOW, session)
+        self.assertEqual(added, "T11")
+        self.assertEqual(len(before["cars"]), 10)
+        self.assertEqual(len(after["cars"]), 11)
+        self.assertEqual(fuel_rate, 20)
+        self.assertEqual(standing_rate, 1500)
+        self.assertEqual(empire.FUEL_PENCE_PER_MILE, fuel_rate)
+        self.assertEqual(empire.STANDING_PENCE, standing_rate)
+        self.assertEqual(before["fuel"], 0)
+        self.assertEqual(after["fuel"], before["fuel"])
+        self.assertEqual(empire.fuel_pence(7), 140)
+        self.assertEqual(before["standing"], standing_rate * 10)
+        self.assertEqual(after["standing"], standing_rate * len(after["cars"]))
+        self.assertNotEqual(after["fuel"], 800000)
+        self.assertNotEqual(after["standing"], before["standing"] + 800000)
+        self.assertEqual(after["fare_in"], before["fare_in"])
+        self.assertEqual(after["new_car"], 800000)
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
