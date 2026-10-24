@@ -29,6 +29,7 @@ KM_PER_MILE = 1.609344
 MPH = 30.0
 STANDING_PENCE = 1500
 FUEL_PENCE_PER_MILE = 20
+NEW_CAR_PENCE = 800000
 CHECK_S = 10
 TRAIL_S = 600
 DEPOT_PAUSE_S = 4
@@ -56,6 +57,7 @@ CARS = tuple(
         start=1,
     )
 )
+OPENING_SIGNS = frozenset(sign for sign, _colour, _offset in CARS)
 STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning")
 BERWICK = (55.7692, -2.0084)
 
@@ -373,7 +375,7 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
     for _ in range(48):
         if car.status == "at_depot":
             car.lat, car.lng = DEPOT
-            if now < car.hold_until:
+            if now < car.hold_until or not car_may_depart(car):
                 break
             _start_fare(car, game, car.hold_until)
             continue
@@ -416,6 +418,27 @@ def driver_share_pence(fare_in: int) -> int:
 def fuel_pence(miles: float) -> int:
     """Fuel is twenty pence a mile, including the empty return."""
     return int(round(float(miles) * FUEL_PENCE_PER_MILE))
+
+
+def new_car_may_leave(paid_pence: int) -> bool:
+    """A new car stays at the depot until 800000 pence is paid."""
+    return int(paid_pence) >= NEW_CAR_PENCE
+
+
+def car_may_depart(car: EmpireCar) -> bool:
+    """The opening ten may leave. A bought car may leave only after it is paid for."""
+    if car.sign in OPENING_SIGNS:
+        return True
+    return car.depart_offset >= 0
+
+
+def pay_new_car(car: EmpireCar, pence: int) -> bool:
+    """Record the 800000 pence line. A smaller payment does not let the car leave."""
+    if not new_car_may_leave(pence):
+        return False
+    if car.depart_offset < 0:
+        car.depart_offset = 0
+    return True
 
 
 def money_lines(car_count: int, fare_in: int = 0, miles: float = 0.0) -> dict[str, int]:
@@ -486,6 +509,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "driver_share": lines["driver_share"],
             "fuel": lines["fuel"],
             "standing": lines["standing"],
+            "new_car": NEW_CAR_PENCE,
         }
     finally:
         if own_session:
