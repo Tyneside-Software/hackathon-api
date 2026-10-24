@@ -21,6 +21,7 @@ from app.routers import (
     board,
     buses,
     devices,
+    empire,
     fields,
     health,
     katie_account,
@@ -34,7 +35,13 @@ from app.routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    from app.empire import start_clock, stop_clock
+
+    start_clock()
+    try:
+        yield
+    finally:
+        await stop_clock()
 
 
 app = FastAPI(title="Hackathon API", version=VERSION, lifespan=lifespan)
@@ -48,6 +55,7 @@ app.add_middleware(
 )
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(empire.router)
 app.include_router(fields.router)
 app.include_router(locations.router)
 app.include_router(devices.router)
