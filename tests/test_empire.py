@@ -597,6 +597,26 @@ class EmpireFleetTests(unittest.TestCase):
             left = empire.snapshot("ada", NOW + 2, session)
         self.assertEqual(self._car(left, "T11")["status"], "to_passenger")
 
+    def test_ten_car_feed_hides_the_company_totals(self) -> None:
+        banned = {2860, 1130, 1240}
+
+        def integers(value):
+            if type(value) is int:
+                yield value
+            elif isinstance(value, dict):
+                for item in value.values():
+                    yield from integers(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from integers(item)
+
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 1, session)
+            body = empire.snapshot("ada", NOW + 1, session)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertTrue(banned.isdisjoint(set(integers(body))))
+
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
