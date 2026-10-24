@@ -11,6 +11,7 @@ import logging
 import math
 import time
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import func, select
@@ -352,6 +353,66 @@ def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tu
     car.lat, car.lng = point_at(route, 0)
 
 
+HOMES = (
+    "Shiremoor",
+    "Backworth",
+    "Earsdon",
+    "West Monkseaton",
+    "Forest Hall",
+    "Killingworth",
+    "Benton",
+)
+MORNING_DROPS = (
+    "Cobalt",
+    "North Tyneside General at Rake Lane",
+    "Regent Centre",
+    "Grey's Monument",
+    "Central Station",
+    "Haymarket",
+    "the Quayside",
+    "Osborne Road",
+)
+
+
+def place_point(name: str) -> tuple[float, float]:
+    for place_name, lat, lng in PLACES:
+        if place_name == name:
+            return (lat, lng)
+    raise KeyError(name)
+
+
+def _last_sunday(year: int, month: int) -> datetime:
+    if month == 12:
+        day = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
+    else:
+        day = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
+    while day.weekday() != 6:
+        day -= timedelta(days=1)
+    return day
+
+
+def _london_offset_hours(utc: datetime) -> int:
+    """BST is UTC+1 from the last Sunday in March at 01:00 UTC until the last Sunday in October at 01:00 UTC."""
+    start = _last_sunday(utc.year, 3).replace(hour=1)
+    end = _last_sunday(utc.year, 10).replace(hour=1)
+    if start <= utc < end:
+        return 1
+    return 0
+
+
+def london_clock(now: float) -> tuple[int, int]:
+    """Hour and minute in Europe/London. Not the machine zone."""
+    utc = datetime.fromtimestamp(now, tz=timezone.utc)
+    local = utc + timedelta(hours=_london_offset_hours(utc))
+    return local.hour, local.minute
+
+
+def is_morning(now: float) -> bool:
+    hour, minute = london_clock(now)
+    minutes = hour * 60 + minute
+    return 7 * 60 <= minutes < 9 * 60 + 30
+
+
 def journey_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
     """Pickup and drop are two places. They are not a ring around the depot."""
     index = raw_bearing(username) % len(PLACES)
@@ -360,8 +421,17 @@ def journey_ends(username: str) -> tuple[tuple[float, float], tuple[float, float
     return (pickup[1], pickup[2]), (drop[1], drop[2])
 
 
+def morning_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """A home toward Cobalt, Rake Lane, Regent Centre, or town."""
+    index = raw_bearing(username)
+    return place_point(HOMES[index % len(HOMES)]), place_point(MORNING_DROPS[index % len(MORNING_DROPS)])
+
+
 def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
-    pickup, drop = journey_ends(car.username)
+    if is_morning(now):
+        pickup, drop = morning_ends(car.username)
+    else:
+        pickup, drop = journey_ends(car.username)
     name = _next_name(game)
     car.passenger = name
     car.fare_name = name
