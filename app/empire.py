@@ -776,13 +776,14 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
         people = _people(session, game.username)
         if len(people) >= target:
             return
-        _kind, pickup, drop = draw_journey(game.username, now, f"person-{len(people)}")
+        index = int(game.name_index or 0)
+        _kind, pickup, drop = draw_journey(game.username, now, f"person-{index}")
         if not inside_circle(pickup) or not inside_circle(drop) or pickup == drop:
             return
         session.add(
             EmpirePerson(
                 username=game.username,
-                name=NAMES[len(people) % len(NAMES)],
+                name=NAMES[index % len(NAMES)],
                 lat=pickup[0],
                 lng=pickup[1],
                 sign="",
@@ -790,6 +791,7 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
                 drop_lng=drop[1],
             )
         )
+        game.name_index = index + 1
         session.flush()
 
 
@@ -914,6 +916,27 @@ def _start_arrived_trip(car: EmpireCar, game: EmpireGame, now: float) -> None:
     car.fare_lat, car.fare_lng = pickup
     car.drop_lat, car.drop_lng = drop
     _begin(car, game, start, drop, now, "with_passenger")
+    _collected_person_leaves(car)
+
+
+def _collected_person_leaves(car: EmpireCar) -> None:
+    """The claimed person leaves once this taxi begins carrying them.
+
+    A person who is still waiting stays. The car keeps the journey it already copied.
+    """
+    session = object_session(car)
+    if session is None:
+        return
+    person = session.scalar(
+        select(EmpirePerson).where(
+            EmpirePerson.username == car.username,
+            EmpirePerson.sign == car.sign,
+        )
+    )
+    if person is None:
+        return
+    session.delete(person)
+    session.flush()
 
 
 def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
@@ -928,6 +951,7 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         end = (car.drop_lat, car.drop_lng)
         car.fare_name = ""
         _begin(car, game, start, end, now, "with_passenger")
+        _collected_person_leaves(car)
         return
     if car.status == "with_passenger":
         start = (car.drop_lat, car.drop_lng)
@@ -1078,6 +1102,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
                     advance_car(car, game, now)
                 except Exception:
                     log.exception("empire car %s %s failed", car.username, car.sign)
+            _ensure_waiting_person(game, session, now)
             _allocate_one_free_taxi(game, session)
             _travel_to_a_better_spot(game, session, now)
         session.commit()
