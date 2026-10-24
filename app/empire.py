@@ -60,6 +60,35 @@ CARS = tuple(
 OPENING_SIGNS = frozenset(sign for sign, _colour, _offset in CARS)
 STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning")
 BERWICK = (55.7692, -2.0084)
+# Published positions. Reading this table does not call the network.
+PLACES = (
+    ("Shiremoor", 55.03535, -1.50950),
+    ("Backworth", 55.0333, -1.5167),
+    ("Earsdon", 55.0464, -1.4783),
+    ("West Monkseaton", 55.03782, -1.47107),
+    ("Forest Hall", 55.0167, -1.5667),
+    ("Killingworth", 55.0333, -1.5667),
+    ("Benton", 55.0074, -1.5558),
+    ("Cobalt", 55.0265, -1.4885),
+    ("Silverlink", 55.0136, -1.4772),
+    ("Royal Quays", 55.0042, -1.4635),
+    ("Regent Centre", 55.0117, -1.6240),
+    ("Four Lane Ends", 55.0101, -1.5785),
+    ("Whitley Bay", 55.0508, -1.4539),
+    ("Spanish City", 55.047616, -1.44747),
+    ("Cullercoats", 55.031646, -1.440003),
+    ("Tynemouth", 55.0206, -1.4494),
+    ("North Shields", 55.0047, -1.4728),
+    ("Grey's Monument", 54.9783, -1.6178),
+    ("Central Station", 54.9686, -1.6171),
+    ("Haymarket", 54.9776, -1.6139),
+    ("the Quayside", 54.970172, -1.600184),
+    ("Osborne Road", 54.9886, -1.6047),
+    ("North Tyneside General at Rake Lane", 55.025, -1.467),
+    ("the RVI", 54.981, -1.620),
+    ("the Freeman", 55.002, -1.594),
+    ("Newcastle Airport", 55.0371, -1.7106),
+)
 
 RouteFn = Callable[[tuple[float, float], tuple[float, float]], dict | None]
 _route_fn: RouteFn | None = None
@@ -323,10 +352,16 @@ def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tu
     car.lat, car.lng = point_at(route, 0)
 
 
+def journey_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Pickup and drop are two places. They are not a ring around the depot."""
+    index = raw_bearing(username) % len(PLACES)
+    pickup = PLACES[index]
+    drop = PLACES[(index + 11) % len(PLACES)]
+    return (pickup[1], pickup[2]), (drop[1], drop[2])
+
+
 def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
-    bearing = trip_bearing(car.username)
-    pickup = destination(DEPOT, bearing, PICKUP_MILES)
-    drop = destination(DEPOT, bearing, DROP_MILES)
+    pickup, drop = journey_ends(car.username)
     name = _next_name(game)
     car.passenger = name
     car.fare_name = name
