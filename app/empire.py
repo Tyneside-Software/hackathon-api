@@ -1608,10 +1608,30 @@ def _job_has_left(car: EmpireCar, now: float) -> bool:
     return haversine_km(point_at(route, fraction), start) > 0.05
 
 
-def cancel_job(username: str, sign: str, now: float | None = None, session: Session | None = None) -> bool:
-    """Cancel a passenger job before the car moves. No fare and no fuel.
+def _stop_passenger_car(car: EmpireCar, now: float) -> None:
+    """Leave the car where it is. The passenger trip is gone, so the feed does not price it again."""
+    point = (float(car.lat), float(car.lng))
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+    car.status = "at_depot"
+    car.lat, car.lng = point
+    car.route_json = json.dumps([[point[0], point[1]], [point[0], point[1]]])
+    car.duration_s = 0
+    car.leg_started = now
+    car.hold_until = now
+    car.osrm = True
+    car.job = "waiting"
 
-    A car that has already left is left as it is.
+
+def cancel_job(username: str, sign: str, now: float | None = None, session: Session | None = None) -> bool:
+    """Cancel a passenger job.
+
+    Before the car moves, fare and fuel stay as they are.
+    After it has left, the miles already driven on this leg become fuel and there is no fare.
     """
     username = normalise_username(username)
     sign = (sign or "").strip()
@@ -1623,33 +1643,24 @@ def cancel_job(username: str, sign: str, now: float | None = None, session: Sess
     if now is None:
         now = time.time()
     try:
-        ensure_game(username, now, session)
+        game = ensure_game(username, now, session)
         car = next((item for item in _cars(session, username) if item.sign == sign), None)
-        if car is None or _job_has_left(car, now):
+        if car is None:
             return False
         person = _allocated_person(car)
         collecting = car.status == "to_passenger" and bool(car.passenger or car.fare_name)
+        carrying = car.status == "with_passenger"
         waiting_here = car.status == "at_depot" and person is not None
-        if not collecting and not waiting_here:
+        if _job_has_left(car, now):
+            if not collecting and not carrying:
+                return False
+            game.miles_driven = float(game.miles_driven or 0) + driven_miles(car, now)
+        elif not collecting and not waiting_here:
             return False
         if person is not None:
             person.sign = ""
-        if collecting:
-            point = (float(car.lat), float(car.lng))
-            car.passenger = ""
-            car.fare_name = ""
-            car.fare_lat = 0.0
-            car.fare_lng = 0.0
-            car.drop_lat = 0.0
-            car.drop_lng = 0.0
-            car.status = "at_depot"
-            car.lat, car.lng = point
-            car.route_json = json.dumps([[point[0], point[1]], [point[0], point[1]]])
-            car.duration_s = 0
-            car.leg_started = now
-            car.hold_until = now
-            car.osrm = True
-            car.job = "waiting"
+        if collecting or carrying:
+            _stop_passenger_car(car, now)
         session.commit()
         return True
     finally:

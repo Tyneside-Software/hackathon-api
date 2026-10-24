@@ -50,7 +50,7 @@ def empire_cancel(
     body: EmpireCancel,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> dict:
-    """Cancel a passenger job before the car moves. No fare and no fuel."""
+    """Cancel a passenger job. Miles already driven become fuel, and there is no fare."""
     if not cancel_job(current_user.username, body.sign):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That job is not waiting to move")
     return snapshot(current_user.username)
