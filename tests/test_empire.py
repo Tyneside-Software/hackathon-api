@@ -912,6 +912,19 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertAlmostEqual(start[0], 55.0367, places=4)
         self.assertAlmostEqual(start[1], -1.5075, places=4)
 
+    def test_leaving_ten_car_routes_start_at_the_depot(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertEqual(len(body["cars"]), 10)
+        for index in range(1, 11):
+            car = self._car(body, f"T{index}")
+            self.assertEqual(car["status"], "to_passenger")
+            start = car["route"][0]
+            self.assertAlmostEqual(start[0], empire.DEPOT[0], places=4)
+            self.assertAlmostEqual(start[1], empire.DEPOT[1], places=4)
+
     def test_status_is_one_of_four_words(self) -> None:
         allowed = {"at_depot", "to_passenger", "with_passenger", "returning"}
         with self.Session() as session:
