@@ -53,6 +53,33 @@ def _bearing_gap(left: float, right: float) -> float:
     return min(gap, 360 - gap)
 
 
+def _empty_patch() -> tuple[tuple[float, float], float]:
+    """A small disk inside the circle that contains none of the published places."""
+    radius = 0.45
+    for bearing in range(0, 360, 15):
+        for miles in (1.5, 2.5, 4.0, 6.0):
+            centre = empire.destination(empire.DEPOT, bearing, miles)
+            if not empire.inside_circle(centre):
+                continue
+            if empire.haversine_km(empire.CIRCLE_CENTRE, centre) + radius > empire.CIRCLE_RADIUS_KM:
+                continue
+            if any(
+                empire.haversine_km(centre, (lat, lng)) <= radius
+                for _name, lat, lng in empire.PLACES
+            ):
+                continue
+            return centre, radius
+    raise AssertionError("no empty patch")
+
+
+def _quiet_account(prefix: str, stamp: float) -> str:
+    for index in range(40):
+        name = f"{prefix}{index}"
+        if empire.spell_target(name, stamp) == 0:
+            return name
+    raise AssertionError(prefix)
+
+
 def _draws_nearest_depot(account: str, stamp: float, count: int) -> list:
     draws = [empire.draw_journey(account, stamp, f"person-{index}") for index in range(count)]
     order = sorted(
@@ -78,7 +105,12 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("device_id", device_columns)
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("location_pings")})
         self.assertIn("device_id", {col["name"] for col in insp.get_columns("device_links")})
-        self.assertIn("cash_pence", {col["name"] for col in insp.get_columns("empire_games")})
+        game_columns = {col["name"] for col in insp.get_columns("empire_games")}
+        self.assertIn("cash_pence", game_columns)
+        self.assertIn("loiter_firm", game_columns)
+        self.assertIn("loiter_lat", game_columns)
+        self.assertIn("loiter_lng", game_columns)
+        self.assertIn("loiter_km", game_columns)
         car_columns = {col["name"] for col in insp.get_columns("empire_cars")}
         self.assertIn("job", car_columns)
         self.assertIn("firm", car_columns)
@@ -112,6 +144,48 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("cash_pence", columns)
         self.assertEqual(row.username, "ada")
         self.assertEqual(row.cash_pence, 0)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_loiter_columns_are_added_without_wiping_the_game(self) -> None:
+        from app.database import ensure_empire_loiter_columns
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_games ("
+                    "username VARCHAR(64) PRIMARY KEY, created_at VARCHAR(64), "
+                    "name_index INTEGER, cash_pence INTEGER)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO empire_games (username, created_at, name_index, cash_pence) "
+                    "VALUES ('ada', '1', 0, 40)"
+                )
+            )
+        ensure_empire_loiter_columns(engine)
+        ensure_empire_loiter_columns(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_games")}
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT username, cash_pence, loiter_firm, loiter_lat, loiter_lng, loiter_km "
+                    "FROM empire_games"
+                )
+            ).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_games")).scalar()
+        self.assertIn("loiter_firm", columns)
+        self.assertIn("loiter_lat", columns)
+        self.assertIn("loiter_lng", columns)
+        self.assertIn("loiter_km", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.cash_pence, 40)
+        self.assertEqual(row.loiter_firm, "")
+        self.assertEqual(row.loiter_lat, 0)
+        self.assertEqual(row.loiter_lng, 0)
+        self.assertEqual(row.loiter_km, 0)
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
@@ -1814,8 +1888,10 @@ class EmpireFleetTests(unittest.TestCase):
                 "new_car",
                 "cash_pence",
                 "firms",
+                "loiter",
             },
         )
+        self.assertIsNone(body["loiter"])
         self.assertEqual(body["cash_pence"], 0)
         self.assertIs(type(body["cash_pence"]), int)
         self.assertEqual(body["fare_in"], 0)
@@ -3354,6 +3430,257 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertTrue(TEMP_DB.endswith(".db"))
         after = live.stat().st_mtime if live.exists() else None
         self.assertEqual(before, after)
+
+    def test_idle_taxis_of_that_firm_loiter_inside_the_patch(self) -> None:
+        quiet = datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp()
+        centre, radius = _empty_patch()
+        account = _quiet_account("patch", quiet + 64)
+        self.assertEqual(empire.spell_target(account, quiet + 64), 0)
+        first = empire.loiter_spot(account, "T9", quiet + 64, centre, radius)
+        self.assertEqual(first, empire.loiter_spot(account, "T9", quiet + 64, centre, radius))
+        other = empire.loiter_spot(account, "T10", quiet + 64, centre, radius, (first,))
+        self.assertNotEqual(other, first)
+        self.assertLessEqual(empire.haversine_km(centre, first), radius)
+        self.assertLessEqual(empire.haversine_km(centre, other), radius)
+        self.assertTrue(empire.inside_circle(first))
+        with self.Session() as session:
+            empire.ensure_game(account, quiet, session)
+            game = session.get(EmpireGame, account)
+            game.cash_pence = 40
+            session.commit()
+            empty = empire.snapshot(account, quiet, session)
+            self.assertIsNone(empty["loiter"])
+            self.assertFalse(empire.set_loiter(account, empire.BERWICK[0], empire.BERWICK[1], radius, "", quiet, session))
+            self.assertFalse(empire.set_loiter(account, centre[0], centre[1], 0, "", quiet, session))
+            self.assertFalse(empire.set_loiter(account, centre[0], centre[1], radius, "west", quiet, session))
+            self.assertIsNone(empire.snapshot(account, quiet, session)["loiter"])
+            self.assertTrue(empire.set_loiter(account, centre[0], centre[1], radius, "", quiet, session))
+            empire.tick_all(quiet + 64, session)
+            body = empire.snapshot(account, quiet + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all())
+            north = list(
+                session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == empire.firm_key(account, "north"))
+                ).all()
+            )
+        self.assertEqual(body["loiter"]["firm"], "")
+        self.assertAlmostEqual(body["loiter"]["lat"], centre[0], places=5)
+        self.assertAlmostEqual(body["loiter"]["lng"], centre[1], places=5)
+        self.assertEqual(body["loiter"]["radius_km"], radius)
+        self.assertEqual(body["cash_pence"], 40)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertNotEqual(body["fare_in"], 800000)
+        self.assertEqual(body["new_car"], 800000)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
+        self.assertEqual(body["people"], [])
+        self.assertEqual(len(cars), 10)
+        ends = []
+        for car in cars:
+            self.assertEqual(car.status, "to_better_spot", car.sign)
+            self.assertEqual(car.passenger, "")
+            self.assertEqual(car.fare_name, "")
+            route = empire._loads(car.route_json, [])
+            end = (route[-1][0], route[-1][1])
+            self.assertLessEqual(empire.haversine_km(centre, end), radius, car.sign)
+            self.assertTrue(empire.inside_circle(end))
+            self.assertNotEqual(end, empire.DEPOT)
+            ends.append((round(end[0], 5), round(end[1], 5)))
+        self.assertEqual(len(ends), len(set(ends)))
+        for car in north:
+            route = empire._loads(car.route_json, [])
+            if len(route) < 2:
+                continue
+            end = (float(route[-1][0]), float(route[-1][1]))
+            self.assertGreater(empire.haversine_km(centre, end), radius, car.sign)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_car_on_a_leg_keeps_it_when_the_patch_is_set(self) -> None:
+        centre, radius = _empty_patch()
+        account = "patchkeep"
+        stamp = DAY + 64
+        with self.Session() as session:
+            empire.ensure_game(account, DAY, session)
+            self.assertTrue(empire.set_loiter(account, centre[0], centre[1], radius, "", DAY, session))
+            kept = {}
+            for sign, status in (("T3", "returning"), ("T4", "with_passenger"), ("T5", "to_passenger")):
+                car = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == sign)
+                ).one()
+                car.status = status
+                car.passenger = "Mina" if status == "with_passenger" else ""
+                car.fare_name = "Mina" if status == "to_passenger" else ""
+                car.route_json = json.dumps([[55.01, -1.50], [55.02, -1.49]])
+                car.duration_s = 10000
+                car.leg_started = stamp
+                car.hold_until = DAY
+                kept[sign] = (car.status, car.route_json, car.leg_started)
+            session.commit()
+            empire.tick_all(stamp, session)
+            body = empire.snapshot(account, stamp, session)
+            for sign, (status, route_json, started) in kept.items():
+                car = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == sign)
+                ).one()
+                self.assertEqual(car.status, status, sign)
+                self.assertEqual(car.route_json, route_json, sign)
+                self.assertEqual(car.leg_started, started, sign)
+            idle = [
+                car
+                for car in session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all()
+                if car.sign not in kept and car.status == "to_better_spot"
+            ]
+        self.assertGreaterEqual(len(idle), 2)
+        ends = []
+        for car in idle:
+            route = empire._loads(car.route_json, [])
+            end = (route[-1][0], route[-1][1])
+            self.assertLessEqual(empire.haversine_km(centre, end), radius, car.sign)
+            ends.append((round(end[0], 5), round(end[1], 5)))
+        self.assertEqual(len(ends), len(set(ends)))
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(body["cash_pence"], 0)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_north_patch_does_not_move_the_players_cars(self) -> None:
+        quiet = datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp()
+        centre, radius = _empty_patch()
+        account = _quiet_account("nfirm", quiet + 64)
+        with self.Session() as session:
+            empire.ensure_game(account, quiet, session)
+            self.assertTrue(
+                empire.set_loiter(account, centre[0], centre[1], radius, "north", quiet, session)
+            )
+            empire.tick_all(quiet + 64, session)
+            body = empire.snapshot(account, quiet + 64, session)
+            player = list(session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all())
+            north = list(
+                session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == empire.firm_key(account, "north"))
+                ).all()
+            )
+            south = list(
+                session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == empire.firm_key(account, "south"))
+                ).all()
+            )
+        self.assertEqual(body["loiter"]["firm"], "north")
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(len(north), 10)
+        north_ends = []
+        for car in north:
+            self.assertEqual(car.status, "to_better_spot", car.sign)
+            route = empire._loads(car.route_json, [])
+            end = (route[-1][0], route[-1][1])
+            self.assertLessEqual(empire.haversine_km(centre, end), radius, car.sign)
+            north_ends.append((round(end[0], 5), round(end[1], 5)))
+        self.assertEqual(len(north_ends), len(set(north_ends)))
+        for car in player + south:
+            route = empire._loads(car.route_json, [])
+            if len(route) < 2:
+                point = (float(car.lat), float(car.lng))
+            else:
+                point = (float(route[-1][0]), float(route[-1][1]))
+            self.assertGreater(empire.haversine_km(centre, point), radius, car.sign)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_two_idle_taxis_already_inside_the_patch_do_not_share_a_point(self) -> None:
+        quiet = datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp()
+        centre, radius = _empty_patch()
+        account = _quiet_account("stay", quiet + 64)
+        sat = empire.destination(centre, 15, 0.1)
+        self.assertLessEqual(empire.haversine_km(centre, sat), radius)
+        stamp = quiet + 64
+        with self.Session() as session:
+            empire.ensure_game(account, quiet, session)
+            self.assertTrue(empire.set_loiter(account, centre[0], centre[1], radius, "", quiet, session))
+            home = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+            ).one()
+            home.status = "at_depot"
+            home.lat, home.lng = sat
+            home.route_json = json.dumps([[sat[0], sat[1]], [sat[0], sat[1]]])
+            home.duration_s = 0
+            home.leg_started = quiet
+            home.hold_until = quiet
+            home.job = "waiting"
+            mover = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T2")
+            ).one()
+            mover.hold_until = quiet
+            for sign in [f"T{number}" for number in range(3, 11)]:
+                car = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == sign)
+                ).one()
+                car.status = "returning"
+                car.passenger = ""
+                car.fare_name = ""
+                car.route_json = json.dumps([[55.04, -1.60], [55.05, -1.61]])
+                car.duration_s = 10000
+                car.leg_started = stamp
+            session.commit()
+            kept = home.route_json
+            empire.tick_all(stamp, session)
+            still = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+            ).one()
+            moved = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T2")
+            ).one()
+            held = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T3")
+            ).one()
+        self.assertEqual(still.status, "at_depot")
+        self.assertEqual(still.route_json, kept)
+        self.assertEqual(still.job, "waiting")
+        route = empire._loads(moved.route_json, [])
+        end = (route[-1][0], route[-1][1])
+        self.assertEqual(moved.status, "to_better_spot")
+        self.assertLessEqual(empire.haversine_km(centre, end), radius)
+        self.assertNotEqual((round(end[0], 5), round(end[1], 5)), (round(sat[0], 5), round(sat[1], 5)))
+        self.assertGreater(empire.haversine_km(end, sat), 0.05)
+        self.assertEqual(held.status, "returning")
+        self.assertEqual(held.route_json, json.dumps([[55.04, -1.60], [55.05, -1.61]]))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_the_feed_sends_the_loiter_patch_the_player_set(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        centre, radius = _empty_patch()
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/v1/empire/loiter", json={"lat": centre[0], "lng": centre[1], "radius_km": radius}).status_code, 401)
+            self.assertEqual(
+                client.post("/register", json={"username": "loitpost", "password": "password1"}).status_code,
+                201,
+            )
+            token = client.post("/login", json={"username": "loitpost", "password": "password1"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            rejected = client.post(
+                "/v1/empire/loiter",
+                headers=headers,
+                json={"lat": empire.BERWICK[0], "lng": empire.BERWICK[1], "radius_km": radius},
+            )
+            self.assertEqual(rejected.status_code, 400)
+            body = client.post(
+                "/v1/empire/loiter",
+                headers=headers,
+                json={"lat": centre[0], "lng": centre[1], "radius_km": radius, "firm": ""},
+            ).json()
+            again = client.get("/v1/empire", headers=headers).json()
+        self.assertEqual(body["username"], "loitpost")
+        self.assertEqual(body["loiter"]["firm"], "")
+        self.assertAlmostEqual(body["loiter"]["lat"], centre[0], places=5)
+        self.assertEqual(body["loiter"]["radius_km"], radius)
+        self.assertEqual(again["loiter"]["lng"], body["loiter"]["lng"])
+        self.assertEqual(body["cash_pence"], 0)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(body["new_car"], 800000)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
 
 if __name__ == "__main__":

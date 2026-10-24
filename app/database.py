@@ -48,6 +48,29 @@ def normalise_username(username: str) -> str:
     return username.strip().lower()
 
 
+def ensure_empire_loiter_columns(bind=None) -> None:
+    """Add the loiter patch to an existing empire_games table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_games" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_games")}
+    wanted = {
+        "loiter_firm": "VARCHAR(16) NOT NULL DEFAULT ''",
+        "loiter_lat": "FLOAT NOT NULL DEFAULT 0",
+        "loiter_lng": "FLOAT NOT NULL DEFAULT 0",
+        "loiter_km": "FLOAT NOT NULL DEFAULT 0",
+    }
+    missing = [name for name in wanted if name not in cols]
+    if not missing:
+        return
+    with target.begin() as conn:
+        for name in missing:
+            conn.execute(text(f"ALTER TABLE empire_games ADD COLUMN {name} {wanted[name]}"))
+
+
 def ensure_empire_cash_column(bind=None) -> None:
     """Add cash_pence to an existing empire_games table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -152,6 +175,7 @@ def init_db() -> None:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
         ensure_empire_cash_column(engine)
+        ensure_empire_loiter_columns(engine)
         ensure_empire_job_column(engine)
         ensure_empire_firm_columns(engine)
         ensure_empire_person_drop_columns(engine)
