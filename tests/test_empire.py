@@ -61,6 +61,22 @@ class EmpireRegisterTests(unittest.TestCase):
         live = ROOT / "hackathon.db"
         self.assertNotEqual(Path(TEMP_DB).resolve(), live.resolve())
 
+    def test_short_password_does_not_start_a_fleet(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+        from app.models import EmpireGame
+
+        with TestClient(app) as client:
+            short = client.post("/register", json={"username": "fleet7", "password": "1234567"})
+            self.assertEqual(short.status_code, 422)
+            ok = client.post("/register", json={"username": "fleet8", "password": "12345678"})
+            self.assertEqual(ok.status_code, 201)
+        with SessionLocal() as session:
+            self.assertIsNone(session.get(EmpireGame, "fleet7"))
+            self.assertIsNotNone(session.get(EmpireGame, "fleet8"))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
 
 class EmpireFleetTests(unittest.TestCase):
     def setUp(self) -> None:
