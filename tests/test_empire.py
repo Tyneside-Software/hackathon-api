@@ -551,6 +551,52 @@ class EmpireFleetTests(unittest.TestCase):
 
         self.assertNotIn(2860, list(integers(body)))
 
+    def test_new_car_costs_800000_before_it_leaves(self) -> None:
+        self.assertEqual(empire.NEW_CAR_PENCE, 800000)
+        self.assertFalse(empire.new_car_may_leave(0))
+        self.assertFalse(empire.new_car_may_leave(799999))
+        self.assertTrue(empire.new_car_may_leave(800000))
+        with self.Session() as session:
+            before = session.scalar(select(func.count()).select_from(Device))
+            empire.ensure_game("ada", NOW, session)
+            session.add(
+                EmpireCar(
+                    username="ada",
+                    sign="T11",
+                    colour="#ffffff",
+                    status="at_depot",
+                    passenger="",
+                    lat=55.0367,
+                    lng=-1.5075,
+                    route_json="[]",
+                    duration_s=0,
+                    leg_started=NOW,
+                    osrm=False,
+                    trail_json="[]",
+                    fare_name="",
+                    hold_until=NOW,
+                    next_check=NOW + empire.CHECK_S,
+                    depart_offset=-1,
+                )
+            )
+            session.commit()
+            extra = session.scalars(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11")).one()
+            self.assertFalse(empire.pay_new_car(extra, 799999))
+            empire.tick_all(NOW + 1, session)
+            body = empire.snapshot("ada", NOW + 1, session)
+            self.assertEqual(body["new_car"], 800000)
+            self.assertIs(type(body["new_car"]), int)
+            self.assertEqual(self._car(body, "T11")["status"], "at_depot")
+            self.assertEqual(self._car(body, "T1")["status"], "to_passenger")
+            after = session.scalar(select(func.count()).select_from(Device))
+            self.assertEqual(before, after)
+            extra = session.scalars(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11")).one()
+            self.assertTrue(empire.pay_new_car(extra, 800000))
+            session.commit()
+            empire.tick_all(NOW + 2, session)
+            left = empire.snapshot("ada", NOW + 2, session)
+        self.assertEqual(self._car(left, "T11")["status"], "to_passenger")
+
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
@@ -570,6 +616,7 @@ class EmpireFleetTests(unittest.TestCase):
                 "driver_share",
                 "fuel",
                 "standing",
+                "new_car",
             },
         )
         self.assertTrue(body["ok"])
