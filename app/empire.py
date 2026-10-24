@@ -1385,6 +1385,57 @@ def _collect_claimed(car: EmpireCar, game: EmpireGame, person: EmpirePerson, now
     _store_job(car)
 
 
+def _purchase_pause_just_ended(car: EmpireCar) -> bool:
+    """True only for the bought car's four-second pause, before its first route.
+
+    Opening cars and other firms do not match. A later pause has already run a route.
+    """
+    if car.sign in OPENING_SIGNS or (car.firm or ""):
+        return False
+    if car.osrm or car.passenger or car.fare_name:
+        return False
+    span = float(car.hold_until) - float(car.leg_started)
+    return abs(span - float(DEPOT_PAUSE_S)) < 0.001
+
+
+def _take_first_bought_fare(
+    car: EmpireCar,
+    game: EmpireGame,
+    session: Session,
+    now: float,
+    taken: list[tuple[float, float]],
+) -> bool:
+    """After the purchase pause, this car takes one fare inside the circle.
+
+    This does not add a car and does not change the fare total. A later pause does not do it again.
+    """
+    if not _purchase_pause_just_ended(car):
+        return False
+    account = game.username
+    for attempt in range(16):
+        _kind, pickup, drop = draw_journey(account, now, f"bought-{car.sign}-{attempt}")
+        if not inside_circle(pickup) or not inside_circle(drop):
+            continue
+        if haversine_km(pickup, drop) <= 0.05:
+            continue
+        person = EmpirePerson(
+            username=account,
+            name=_next_name(game),
+            lat=pickup[0],
+            lng=pickup[1],
+            sign=car.sign,
+            drop_lat=drop[0],
+            drop_lng=drop[1],
+            arrived=now,
+        )
+        session.add(person)
+        session.flush()
+        _collect_claimed(car, game, person, now)
+        taken.append(pickup)
+        return True
+    return False
+
+
 def _travel_to_a_better_spot(
     game: EmpireGame,
     session: Session,
@@ -1397,6 +1448,7 @@ def _travel_to_a_better_spot(
     A car that is collecting, carrying, or returning keeps that leg.
     The depot is for a break. 800000 is not a fare.
     Another firm passes its own draw seed. The player's seed stays the bare username.
+    A bought car takes one fare inside the circle when its four-second purchase pause ends.
     """
     fleet_name = draw_as or game.username
     patch = loiter_for_fleet(game, draw_as)
@@ -1422,6 +1474,8 @@ def _travel_to_a_better_spot(
             person = claimed.get(car.sign)
             if person is not None:
                 _collect_claimed(car, game, person, now)
+                continue
+            if _take_first_bought_fare(car, game, session, now, taken):
                 continue
             depot = car_depot(car)
             start = car_position(car, depot)
