@@ -48,6 +48,21 @@ def normalise_username(username: str) -> str:
     return username.strip().lower()
 
 
+def ensure_empire_fare_column(bind=None) -> None:
+    """Add fare_in to an existing empire_games table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_games" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_games")}
+    if "fare_in" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_games ADD COLUMN fare_in INTEGER NOT NULL DEFAULT 0"))
+
+
 def ensure_empire_loiter_columns(bind=None) -> None:
     """Add the loiter patch to an existing empire_games table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -175,6 +190,7 @@ def init_db() -> None:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE device_links ADD COLUMN nickname VARCHAR(64)"))
         ensure_empire_cash_column(engine)
+        ensure_empire_fare_column(engine)
         ensure_empire_loiter_columns(engine)
         ensure_empire_job_column(engine)
         ensure_empire_firm_columns(engine)

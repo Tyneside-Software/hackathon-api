@@ -627,6 +627,7 @@ class EmpireGame(Base):
     created_at: Mapped[str] = mapped_column(String(64), default="")
     name_index: Mapped[int] = mapped_column(Integer, default=0)
     cash_pence: Mapped[int] = mapped_column(Integer, default=0)
+    fare_in: Mapped[int] = mapped_column(Integer, default=0)
     loiter_firm: Mapped[str] = mapped_column(String(16), default="")
     loiter_lat: Mapped[float] = mapped_column(Float, default=0)
     loiter_lng: Mapped[float] = mapped_column(Float, default=0)
