@@ -856,12 +856,17 @@ class EmpireFleetTests(unittest.TestCase):
             empire.tick_all(home + 1, session)
             body = empire.snapshot("ada", home + 1, session)
             self.assertEqual(self._car(body, "T1")["status"], "at_depot")
+            home_job = self._car(body, "T1")["job"]
             empire.tick_all(home + 3, session)
             body = empire.snapshot("ada", home + 3, session)
             self.assertEqual(self._car(body, "T1")["status"], "at_depot")
             empire.tick_all(home + 5, session)
             body = empire.snapshot("ada", home + 5, session)
-            self.assertEqual(self._car(body, "T1")["status"], "to_passenger")
+            if home_job == "on break":
+                self.assertEqual(self._car(body, "T1")["status"], "at_depot")
+                self.assertEqual(self._car(body, "T1")["job"], "on break")
+            else:
+                self.assertEqual(self._car(body, "T1")["status"], "to_passenger")
 
     def test_each_of_the_ten_waits_four_seconds(self) -> None:
         self.assertEqual(empire.DEPOT_PAUSE_S, 4)
@@ -1140,7 +1145,9 @@ class EmpireFleetTests(unittest.TestCase):
                 fares = [fare for fare in body["fares"] if fare["sign"] == "T1"]
                 if fares and (not seen or seen[-1] != fares[0]["name"]):
                     seen.append(fares[0]["name"])
-        self.assertEqual(seen, ["Mina"])
+        self.assertTrue(seen)
+        self.assertEqual(seen[0], "Mina")
+        self.assertTrue(all(name in ("Mina", "Owen", "Priya", "Jack", "Helen", "Tom") for name in seen))
         game = empire.EmpireGame(username="ada", created_at="0", name_index=0, cash_pence=0)
         self.assertEqual(
             [empire._next_name(game) for _ in range(6)],
@@ -2650,10 +2657,14 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual([car["sign"] for car in body["cars"]], [f"T{number}" for number in range(1, 11)])
             self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
             self.assertEqual(len(body["people"]), 1)
-            self.assertEqual(body["people"][0]["sign"], "T1")
+            self.assertNotEqual(body["people"][0]["sign"], "T1")
+            appeared = empire.draw_journey("arrivedtrip", arrive, "person-1")
+            self.assertEqual((body["people"][0]["lat"], body["people"][0]["lng"]), appeared[1])
+            self.assertEqual(body["people"][0]["name"], "Owen")
+            self.assertNotEqual((body["people"][0]["lat"], body["people"][0]["lng"]), pickup)
             self.assertEqual(arrived.status, "with_passenger")
             self.assertEqual(arrived.job, "carrying")
-            self.assertEqual(arrived.passenger, body["people"][0]["name"])
+            self.assertEqual(arrived.passenger, early["people"][0]["name"])
             self.assertTrue(arrived.passenger)
             self.assertEqual(arrived.fare_name, "")
             self.assertEqual((arrived.fare_lat, arrived.fare_lng), pickup)
@@ -2669,6 +2680,51 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(idle.fare_name, "")
             self.assertNotEqual(idle.status, "with_passenger")
             self.assertNotEqual(idle.job, "carrying")
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_waiting_person_stays_until_their_taxi_arrives(self) -> None:
+        morning = datetime(2023, 11, 15, 8, 0, tzinfo=timezone.utc).timestamp()
+
+        def quick(start, end):
+            return {"points": [[start[0], start[1]], [end[0], end[1]]], "duration_s": 30}
+
+        empire.set_route_fn(quick)
+        account = "staypin"
+        with self.Session() as session:
+            empire.ensure_game(account, morning, session)
+            empire.tick_all(morning + 1, session)
+            early = empire.snapshot(account, morning + 1, session)
+            self.assertGreater(len(early["people"]), 10)
+            self.assertEqual(len(early["cars"]), 10)
+            carried = next(person for person in early["people"] if person["sign"] == "T1")
+            moving = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+            ).one()
+            self.assertEqual(moving.status, "to_passenger")
+            arrive = moving.leg_started + moving.duration_s + 1
+            empire.tick_all(arrive, session)
+            body = empire.snapshot(account, arrive, session)
+            car = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+            ).one()
+        self.assertEqual(car.status, "with_passenger")
+        self.assertEqual(car.passenger, carried["name"])
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertNotIn("T11", [row["sign"] for row in body["cars"]])
+        self.assertEqual(body["fare_in"], 0)
+        self.assertNotEqual(body["fare_in"], 800000)
+        carried_key = (carried["name"], carried["lat"], carried["lng"])
+        before = [(person["name"], person["lat"], person["lng"]) for person in early["people"]]
+        after = [(person["name"], person["lat"], person["lng"]) for person in body["people"]]
+        self.assertEqual(before.count(carried_key), 1)
+        self.assertEqual(after.count(carried_key), 0)
+        for key in set(before):
+            if key == carried_key:
+                continue
+            self.assertGreaterEqual(after.count(key), before.count(key))
+        appeared = empire.draw_journey(account, arrive, f"person-{len(early['people'])}")
+        self.assertIn((empire.NAMES[len(early["people"]) % len(empire.NAMES)], appeared[1][0], appeared[1][1]), after)
+        self.assertEqual(len(after), len(before))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_each_taxi_draws_its_own_spot(self) -> None:
