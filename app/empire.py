@@ -1213,6 +1213,7 @@ def _start_arrived_trip(car: EmpireCar, game: EmpireGame, now: float) -> None:
     car.fare_name = ""
     car.fare_lat, car.fare_lng = pickup
     car.drop_lat, car.drop_lng = drop
+    car.journey = (person.journey or "") if person is not None else ""
     _begin(car, game, start, drop, now, "with_passenger")
     _collected_person_leaves(car)
 
@@ -2030,6 +2031,7 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
         "pickup": trip["pickup"],
         "drop": trip["drop"],
         "trip_pence": trip["trip_pence"],
+        "journey": (car.journey or "") if car.status == "with_passenger" else "",
     }
 
 

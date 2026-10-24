@@ -666,6 +666,7 @@ class EmpireCar(Base):
     firm: Mapped[str] = mapped_column(String(16), default="")
     depot_lat: Mapped[float] = mapped_column(Float, default=0)
     depot_lng: Mapped[float] = mapped_column(Float, default=0)
+    journey: Mapped[str] = mapped_column(String(32), default="")
 
 
 class EmpirePerson(Base):
