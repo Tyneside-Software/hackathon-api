@@ -241,6 +241,19 @@ class EmpireFleetTests(unittest.TestCase):
             )
         self.assertEqual(before, after)
 
+    def test_creating_ten_cars_does_not_insert_a_device(self) -> None:
+        with self.Session() as session:
+            before = session.scalar(select(func.count()).select_from(Device))
+            empire.ensure_game("ada", NOW, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            after = session.scalar(select(func.count()).select_from(Device))
+            columns = {col["name"] for col in inspect(session.get_bind()).get_columns("empire_cars")}
+        signs = sorted((car.sign for car in cars), key=lambda sign: int(sign[1:]))
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
+        self.assertEqual(before, 0)
+        self.assertEqual(after, 0)
+        self.assertNotIn("device_id", columns)
+
     def test_old_trail_points_are_dropped(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
