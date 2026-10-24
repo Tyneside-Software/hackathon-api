@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import json
 import math
 import os
 import random
@@ -52,6 +53,15 @@ def _bearing_gap(left: float, right: float) -> float:
     return min(gap, 360 - gap)
 
 
+def _draws_nearest_depot(account: str, stamp: float, count: int) -> list:
+    draws = [empire.draw_journey(account, stamp, f"person-{index}") for index in range(count)]
+    order = sorted(
+        range(count),
+        key=lambda item: (empire.haversine_km(empire.DEPOT, draws[item][1]), item),
+    )
+    return [draws[item] for item in order]
+
+
 class EmpireTableTests(unittest.TestCase):
     def test_empire_tables_have_no_device_id(self) -> None:
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
@@ -77,6 +87,7 @@ class EmpireTableTests(unittest.TestCase):
         person_columns = {col["name"] for col in insp.get_columns("empire_people")}
         self.assertIn("drop_lat", person_columns)
         self.assertIn("drop_lng", person_columns)
+        self.assertIn("arrived", person_columns)
 
     def test_cash_pence_column_is_added_without_wiping_the_game(self) -> None:
         from app.database import ensure_empire_cash_column
@@ -199,6 +210,38 @@ class EmpireTableTests(unittest.TestCase):
         self.assertEqual(row.sign, "")
         self.assertEqual(row.drop_lat, 0)
         self.assertEqual(row.drop_lng, 0)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_arrived_column_is_added_without_wiping_the_person(self) -> None:
+        from app.database import ensure_empire_person_arrived_column
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_people ("
+                    "id INTEGER PRIMARY KEY, username VARCHAR(64), name VARCHAR(64), "
+                    "lat FLOAT, lng FLOAT, sign VARCHAR(8))"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO empire_people (username, name, lat, lng, sign) "
+                    "VALUES ('ada', 'Mina', 55.03, -1.51, '')"
+                )
+            )
+        ensure_empire_person_arrived_column(engine)
+        ensure_empire_person_arrived_column(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_people")}
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT username, name, sign, arrived FROM empire_people")).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_people")).scalar()
+        self.assertIn("arrived", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.name, "Mina")
+        self.assertEqual(row.sign, "")
+        self.assertEqual(row.arrived, 0)
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
@@ -886,25 +929,18 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertFalse([fare for fare in body["fares"] if fare["sign"] == "T1"])
             carrying = self._car(body, "T1")
             back = carrying["leg_started"] + carrying["duration_s"]
+            drop_at = (carrying["route"][-1][0], carrying["route"][-1][1])
             empire.tick_all(back + 1, session)
             body = empire.snapshot("ada", back + 1, session)
-            self.assertEqual(self._car(body, "T1")["status"], "returning")
-            returning = self._car(body, "T1")
-            home = returning["leg_started"] + returning["duration_s"]
-            empire.tick_all(home + 1, session)
-            body = empire.snapshot("ada", home + 1, session)
-            self.assertEqual(self._car(body, "T1")["status"], "at_depot")
-            home_job = self._car(body, "T1")["job"]
-            empire.tick_all(home + 3, session)
-            body = empire.snapshot("ada", home + 3, session)
-            self.assertEqual(self._car(body, "T1")["status"], "at_depot")
-            empire.tick_all(home + 5, session)
-            body = empire.snapshot("ada", home + 5, session)
-            if home_job == "on break":
-                self.assertEqual(self._car(body, "T1")["status"], "at_depot")
-                self.assertEqual(self._car(body, "T1")["job"], "on break")
-            else:
-                self.assertEqual(self._car(body, "T1")["status"], "to_passenger")
+            finished = self._car(body, "T1")
+            self.assertNotEqual(finished["status"], "with_passenger")
+            self.assertEqual(len(body["cars"]), 10)
+            self.assertEqual(body["fare_in"], 0)
+            self.assertNotEqual(body["fare_in"], 800000)
+            if finished["status"] != "at_depot":
+                self.assertGreaterEqual(len(finished["route"]), 2)
+                self.assertAlmostEqual(finished["route"][0][0], drop_at[0], places=4)
+                self.assertAlmostEqual(finished["route"][0][1], drop_at[1], places=4)
 
     def test_each_of_the_ten_waits_four_seconds(self) -> None:
         self.assertEqual(empire.DEPOT_PAUSE_S, 4)
@@ -1988,7 +2024,7 @@ class EmpireFleetTests(unittest.TestCase):
             (late, "latemorn"),
         ):
             status, pickup, drop, people = claim(account, stamp)
-            drawn = empire.draw_journey(account, stamp + 1, "person-0")
+            drawn = _draws_nearest_depot(account, stamp + 1, people)[0]
             self.assertEqual(status, "to_passenger", account)
             self.assertGreater(people, 10, account)
             self.assertEqual((pickup, drop), drawn[1:], account)
@@ -2130,7 +2166,7 @@ class EmpireFleetTests(unittest.TestCase):
             (summer_late, "evebst"),
         ):
             status, pickup, drop, people = claim(account, stamp)
-            drawn = empire.draw_journey(account, stamp + 1, "person-0")
+            drawn = _draws_nearest_depot(account, stamp + 1, people)[0]
             self.assertEqual(status, "to_passenger", account)
             self.assertGreater(people, 10, account)
             self.assertEqual((pickup, drop), drawn[1:], account)
@@ -2208,12 +2244,18 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertLess(len(day_moving), 10)
         self.assertEqual(day_cars["T1"][1:], empire.draw_journey("niteday", noon + 64, "person-0")[1:])
         morning_cars = fleet("nitemorn", morning, morning + 64)
+        morning_draws = _draws_nearest_depot(
+            "nitemorn", morning + 64, empire.spell_target("nitemorn", morning + 64)
+        )
         self.assertEqual(morning_cars["T1"][0], "to_passenger")
-        self.assertEqual(morning_cars["T1"][1:], empire.draw_journey("nitemorn", morning + 64, "person-0")[1:])
-        self.assertEqual(morning_cars["T2"][1:], empire.draw_journey("nitemorn", morning + 64, "person-1")[1:])
+        self.assertEqual(morning_cars["T1"][1:], morning_draws[0][1:])
+        self.assertEqual(morning_cars["T2"][1:], morning_draws[1][1:])
         previous = fleet("niteprev", before, before + 1)["T1"]
+        previous_draw = _draws_nearest_depot(
+            "niteprev", before + 1, empire.spell_target("niteprev", before + 1)
+        )[0]
         self.assertEqual(previous[0], "to_passenger")
-        self.assertEqual(previous[1:], empire.draw_journey("niteprev", before + 1, "person-0")[1:])
+        self.assertEqual(previous[1:], previous_draw[1:])
         edge_cars = fleet("niteone", edge, edge + 1)
         if empire.spell_target("niteone", edge + 1) == 0:
             self.assertEqual(edge_cars["T1"][1], (0.0, 0.0))
@@ -2341,12 +2383,19 @@ class EmpireFleetTests(unittest.TestCase):
                 if people:
                     self.assertEqual(moving["status"], "to_passenger", stamp)
                     self.assertGreater(len(route), 2, stamp)
-                    person = people[0]
+                    first = people[0]
                     _kind, drawn, drop = empire.draw_journey(account, stamp + 1, "person-0")
+                    self.assertEqual(first["name"], "Mina", stamp)
+                    self.assertEqual((first["lat"], first["lng"]), drawn, stamp)
+                    person = min(
+                        enumerate(people),
+                        key=lambda item: (
+                            empire.haversine_km(empire.DEPOT, (item[1]["lat"], item[1]["lng"])),
+                            item[0],
+                        ),
+                    )[1]
                     point = (person["lat"], person["lng"])
                     self.assertEqual(person["sign"], "T1", stamp)
-                    self.assertEqual(person["name"], "Mina", stamp)
-                    self.assertEqual(point, drawn, stamp)
                     self.assertNotEqual(drawn, drop, stamp)
                     self.assertIn(point, places, stamp)
                     self.assertNotEqual(point, empire.BERWICK, stamp)
@@ -2359,8 +2408,11 @@ class EmpireFleetTests(unittest.TestCase):
                 again = empire.snapshot(account, stamp + 2, session)
                 self.assertEqual(len(again["people"]), target, stamp)
                 if people:
-                    self.assertEqual(again["people"][0]["sign"], "T1")
-                    self.assertEqual((again["people"][0]["lat"], again["people"][0]["lng"]), point)
+                    again_person = next(
+                        person for person in again["people"] if (person["lat"], person["lng"]) == point
+                    )
+                    self.assertEqual(again_person["sign"], "T1")
+                    self.assertEqual((again_person["lat"], again_person["lng"]), point)
                 self.assertEqual([car["sign"] for car in again["cars"]], [f"T{number}" for number in range(1, 11)])
                 stayed = session.scalars(
                     select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
@@ -3118,11 +3170,10 @@ class EmpireFleetTests(unittest.TestCase):
         depots = tuple(homes[firm] for firm in empire.FIRM_NAMES)
         firm_by_sign = {car["sign"]: firm for firm in body["firms"] for car in firm["cars"]}
         for person in claimed:
-            winner = empire.depot_takes_pickup(
-                (person["lat"], person["lng"]),
+            pickup = (person["lat"], person["lng"])
+            winner = min(
                 depots,
-                account,
-                f"leftover-{id_by_sign[person['sign']]}",
+                key=lambda depot: (empire.haversine_km(depot, pickup), depot[0], depot[1]),
             )
             self.assertEqual([winner[0], winner[1]], firm_by_sign[person["sign"]]["depot"])
             car = next(item for item in firm_by_sign[person["sign"]]["cars"] if item["sign"] == person["sign"])
@@ -3141,6 +3192,159 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertGreater(player_miles, 0)
         self.assertNotEqual(body["fuel"], empire.fuel_pence(player_miles + firm_miles))
         self.assertNotIn("device_id", EmpireCar.__table__.columns.keys())
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_finished_car_takes_the_closest_person_from_where_it_is(self) -> None:
+        night = datetime(2023, 11, 15, 22, 0, tzinfo=timezone.utc).timestamp()
+        account = "nearcar"
+        home = empire.place_point("Whitley Bay")
+        drop = empire.place_point("Tynemouth")
+        owen_at = empire.destination(drop, 40, 0.2)
+        priya_at = empire.destination(home, 20, 0.15)
+        self.assertGreater(empire.haversine_km(home, drop), 0.5)
+        self.assertEqual(empire.spell_target(account, night), 1)
+        with self.Session() as session:
+            empire.ensure_game(account, night, session)
+            held = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T3")
+            ).one()
+            held.status = "returning"
+            held.passenger = ""
+            held.fare_name = ""
+            held.route_json = "[[55.01, -1.51], [55.02, -1.52]]"
+            held.duration_s = 10000
+            held.leg_started = night
+            kept_route = held.route_json
+            finished = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+            ).one()
+            finished.status = "with_passenger"
+            finished.passenger = "Mina"
+            finished.fare_name = ""
+            finished.fare_lat, finished.fare_lng = home
+            finished.drop_lat, finished.drop_lng = drop
+            finished.route_json = json.dumps([[home[0], home[1]], [drop[0], drop[1]]])
+            finished.duration_s = 30
+            finished.leg_started = night
+            finished.lat, finished.lng = home
+            near = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T2")
+            ).one()
+            near.status = "at_depot"
+            near.lat, near.lng = home
+            near.route_json = json.dumps([[home[0], home[1]], [home[0], home[1]]])
+            near.hold_until = night
+            near.duration_s = 0
+            session.add(
+                empire.EmpirePerson(
+                    username=account,
+                    name="Owen",
+                    lat=owen_at[0],
+                    lng=owen_at[1],
+                    sign="",
+                    drop_lat=home[0],
+                    drop_lng=home[1],
+                    arrived=night - 40,
+                )
+            )
+            session.add(
+                empire.EmpirePerson(
+                    username=account,
+                    name="Priya",
+                    lat=priya_at[0],
+                    lng=priya_at[1],
+                    sign="",
+                    drop_lat=drop[0],
+                    drop_lng=drop[1],
+                    arrived=night - 40,
+                )
+            )
+            session.commit()
+            empire.tick_all(night + 30, session)
+            body = empire.snapshot(account, night + 30, session)
+            kept = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T3")
+            ).one()
+            player = list(session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all())
+        self.assertEqual(len(player), 10)
+        self.assertNotIn("T11", [car.sign for car in player])
+        self.assertEqual(kept.status, "returning")
+        self.assertEqual(kept.route_json, kept_route)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertNotEqual(body["fare_in"], 800000)
+        self.assertEqual(body["new_car"], 800000)
+        collected = self._car(body, "T1")
+        parked = self._car(body, "T2")
+        self.assertEqual(collected["status"], "to_passenger")
+        self.assertEqual(collected["job"], "collecting")
+        self.assertAlmostEqual(collected["route"][0][0], drop[0], places=4)
+        self.assertAlmostEqual(collected["route"][0][1], drop[1], places=4)
+        self.assertAlmostEqual(collected["route"][-1][0], owen_at[0], places=4)
+        self.assertAlmostEqual(collected["route"][-1][1], owen_at[1], places=4)
+        self.assertNotEqual((round(collected["route"][0][0], 4), round(collected["route"][0][1], 4)), (round(empire.DEPOT[0], 4), round(empire.DEPOT[1], 4)))
+        self.assertEqual(parked["status"], "to_passenger")
+        self.assertAlmostEqual(parked["route"][0][0], home[0], places=4)
+        self.assertAlmostEqual(parked["route"][-1][0], priya_at[0], places=4)
+        self.assertGreater(collected["seconds_left"], 0)
+        self.assertEqual(parked["seconds_left"], int(parked["duration_s"]))
+        owen = next(person for person in body["people"] if person["name"] == "Owen")
+        priya = next(person for person in body["people"] if person["name"] == "Priya")
+        self.assertEqual(owen["sign"], "T1")
+        self.assertEqual(priya["sign"], "T2")
+        self.assertEqual(owen["seconds_left"], collected["seconds_left"])
+        self.assertEqual(priya["seconds_left"], parked["seconds_left"])
+        self.assertEqual(owen["waiting_s"], 70)
+        self.assertEqual(priya["waiting_s"], 70)
+        signs = [person["sign"] for person in body["people"] if person["sign"] in {"T1", "T2"}]
+        self.assertEqual(len(signs), len(set(signs)))
+        self.assertNotIn("device_id", empire.EmpirePerson.__table__.columns.keys())
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_firm_takes_the_closest_leftover_car(self) -> None:
+        night = datetime(2023, 11, 15, 22, 0, tzinfo=timezone.utc).timestamp()
+        account = "firmnear"
+        with self.Session() as session:
+            empire.ensure_game(account, night, session)
+            homes = empire.firm_depots(account)
+            jack_at = empire.destination(homes["north"], 15, 0.2)
+            for car in session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all():
+                car.status = "returning"
+                car.passenger = ""
+                car.fare_name = ""
+                car.route_json = "[[55.01, -1.51], [55.02, -1.52]]"
+                car.duration_s = 10000
+                car.leg_started = night
+            session.add(
+                empire.EmpirePerson(
+                    username=account,
+                    name="Jack",
+                    lat=jack_at[0],
+                    lng=jack_at[1],
+                    sign="",
+                    drop_lat=homes["south"][0],
+                    drop_lng=homes["south"][1],
+                    arrived=night,
+                )
+            )
+            session.commit()
+            empire.tick_all(night + 1, session)
+            body = empire.snapshot(account, night + 1, session)
+            player = list(session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all())
+        self.assertEqual(len(player), 10)
+        self.assertTrue(all(car.status == "returning" for car in player))
+        jack = next(person for person in body["people"] if person["name"] == "Jack")
+        self.assertTrue(jack["sign"].startswith("N"))
+        north = next(firm for firm in body["firms"] if firm["firm"] == "north")
+        car = next(item for item in north["cars"] if item["sign"] == jack["sign"])
+        self.assertEqual(car["status"], "to_passenger")
+        self.assertEqual(car["job"], "collecting")
+        self.assertEqual(car["seconds_left"], jack["seconds_left"])
+        self.assertGreater(car["seconds_left"], 0)
+        self.assertAlmostEqual(car["route"][0][0], homes["north"][0], places=4)
+        self.assertAlmostEqual(car["route"][-1][0], jack_at[0], places=4)
+        self.assertEqual(jack["waiting_s"], 1)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(len(body["cars"]), 10)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
