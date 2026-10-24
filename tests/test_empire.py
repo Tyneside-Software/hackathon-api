@@ -254,6 +254,30 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(after, 0)
         self.assertNotIn("device_id", columns)
 
+    def test_ten_car_clock_uses_real_seconds(self) -> None:
+        route = [[55.0, -1.5], [56.0, -1.5]]
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for car in cars:
+                car.status = "to_passenger"
+                car.route_json = "[[55.0, -1.5], [56.0, -1.5]]"
+                car.duration_s = 100
+                car.leg_started = NOW
+                car.hold_until = NOW + 10000
+            session.commit()
+            empire.tick_all(NOW + 1, session)
+            body = empire.snapshot("ada", NOW + 1, session)
+        expected = empire.point_at(route, 0.01)
+        faster = empire.point_at(route, 0.02)
+        for index in range(1, 11):
+            car = self._car(body, f"T{index}")
+            self.assertAlmostEqual(car["lat"], expected[0], places=4)
+            self.assertAlmostEqual(car["lng"], expected[1], places=4)
+            self.assertNotAlmostEqual(car["lat"], faster[0], places=4)
+        self.assertFalse(empire.clock_running())
+
     def test_old_trail_points_are_dropped(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
