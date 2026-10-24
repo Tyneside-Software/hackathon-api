@@ -155,6 +155,30 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertIs(type(body["trail_s"]), int)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_company_figure_minus_1120_stays_off_the_ten_car_feed(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        def integers(value):
+            if type(value) is int:
+                yield value
+            elif isinstance(value, dict):
+                for item in value.values():
+                    yield from integers(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from integers(item)
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "off1120", "password": "password1"}).status_code, 201)
+            token = client.post("/login", json={"username": "off1120", "password": "password1"}).json()["access_token"]
+            body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertNotIn(-1120, list(integers(body)))
+        self.assertNotIn("-1120", str(body))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
 
 class EmpireFleetTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -857,6 +881,26 @@ class EmpireFleetTests(unittest.TestCase):
             body = empire.snapshot("ada", NOW + 1, session)
         self.assertEqual(len(body["cars"]), 10)
         self.assertTrue(banned.isdisjoint(set(integers(body))))
+
+    def test_driven_ten_car_feed_omits_minus_1120(self) -> None:
+        def integers(value):
+            if type(value) is int:
+                yield value
+            elif isinstance(value, dict):
+                for item in value.values():
+                    yield from integers(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from integers(item)
+
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertGreater(body["fuel"], 0)
+        self.assertNotIn(-1120, list(integers(body)))
+        self.assertNotIn("-1120", str(body))
 
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
