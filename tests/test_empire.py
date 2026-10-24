@@ -205,6 +205,19 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertAlmostEqual(car["lat"], 55.0367, places=4)
             self.assertAlmostEqual(car["lng"], -1.5075, places=4)
 
+    def test_ten_car_feed_does_not_grow_an_eleventh_sign(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.ensure_game("ada", NOW + 30, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+            stored = [car.sign for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()]
+        signs = [car["sign"] for car in body["cars"]]
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
+        self.assertEqual(sorted(stored, key=lambda sign: int(sign[1:])), signs)
+        self.assertNotIn("T11", signs)
+        self.assertEqual(len(stored), 10)
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
