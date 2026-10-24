@@ -327,6 +327,25 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertNotIn("device_id", EmpireCar.__table__.columns.keys())
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_purchase_adds_a_car_only_to_that_account(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.ensure_game("bee", NOW, session)
+            added = empire.buy_car("ada", 800000, NOW, session)
+            ada_stored = [car.sign for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()]
+            bee_stored = [car.sign for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "bee")).all()]
+            ada = empire.snapshot("ada", NOW, session)
+            bee = empire.snapshot("bee", NOW, session)
+        ada_signs = [car["sign"] for car in ada["cars"]]
+        bee_signs = [car["sign"] for car in bee["cars"]]
+        self.assertEqual(added, "T11")
+        self.assertEqual(ada_signs, [f"T{index}" for index in range(1, 12)])
+        self.assertEqual(sorted(ada_stored, key=lambda sign: int(sign[1:])), ada_signs)
+        self.assertEqual(bee_signs, [f"T{index}" for index in range(1, 11)])
+        self.assertEqual(sorted(bee_stored, key=lambda sign: int(sign[1:])), bee_signs)
+        self.assertNotIn("T11", bee_signs)
+        self.assertEqual(len(bee_stored), 10)
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
