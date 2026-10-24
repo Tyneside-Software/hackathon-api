@@ -11,7 +11,7 @@ Python **FastAPI** backend for the Tyneside Logistics hackathon. The live proces
 
 SSH and the password: site doc `docs/linux.md`. The password is not in git. On Michael’s PC it is `C:\Users\MichaelThomson\Desktop\hackathon-linux.md`.
 
-The picture of **all three** repos is the site wiki: [Architecture](https://hackathon.tyneside.software/docs/#architecture). Deploy steps: [Linux box](https://hackathon.tyneside.software/docs/#linux).
+The picture of **all three** repos is the site wiki: [Architecture](https://hackathon.tyneside.software/docs/#architecture). Deploy steps: [Linux box](https://hackathon.tyneside.software/docs/#linux). Parallel work uses a `lane/<owner>/<slug>` branch and a pull request into `main`. Issues live on hackathon-site. See [Lanes](https://hackathon.tyneside.software/docs/#lanes). Only the integrator checkout deploys.
 
 To run site + API together, clone both as siblings and from the **site** folder run `.\start.ps1`.
 
