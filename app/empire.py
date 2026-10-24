@@ -402,6 +402,13 @@ TOWN = (
 )
 EVENING_PICKUPS = ("Cobalt",) + TOWN
 EVENING_DROPS = HOMES + COAST
+NIGHT_PICKUPS = (
+    "the Quayside",
+    "Osborne Road",
+    "Tynemouth",
+    "Whitley Bay",
+)
+AIRPORT_NAME = "Newcastle Airport"
 
 
 def place_point(name: str) -> tuple[float, float]:
@@ -455,6 +462,12 @@ def is_evening(now: float) -> bool:
     return 16 * 60 + 30 <= minutes < 19 * 60 + 30
 
 
+def is_night(now: float) -> bool:
+    hour, minute = london_clock(now)
+    minutes = hour * 60 + minute
+    return minutes >= 19 * 60 + 30 or minutes < 60
+
+
 def journey_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
     """Pickup and drop are two places. They are not a ring around the depot."""
     index = raw_bearing(username) % len(PLACES)
@@ -484,13 +497,55 @@ def evening_ends(username: str) -> tuple[tuple[float, float], tuple[float, float
     )
 
 
+def night_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The Quayside, Osborne Road, Tynemouth, or Whitley Bay back to a home."""
+    index = raw_bearing(username)
+    return (
+        place_point(NIGHT_PICKUPS[index % len(NIGHT_PICKUPS)]),
+        place_point(HOMES[index % len(HOMES)]),
+    )
+
+
+def airport_sign(sign: str) -> bool:
+    """One car in ten. T10, not the whole fleet."""
+    return int(sign[1:]) % 10 == 0
+
+
+def airport_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Newcastle Airport toward town or the coast."""
+    index = raw_bearing(username)
+    drops = TOWN + COAST
+    return place_point(AIRPORT_NAME), place_point(drops[index % len(drops)])
+
+
+def _quiet_release(now: float) -> float:
+    """Even cars wait out the quiet night and leave at 01:00 Europe/London."""
+    hour, minute = london_clock(now)
+    minutes = hour * 60 + minute
+    if minutes < 60:
+        wait = 60 - minutes
+    else:
+        wait = 24 * 60 + 60 - minutes
+    return now + wait * 60
+
+
+def _parked_for_quiet(car: EmpireCar, now: float) -> bool:
+    if airport_sign(car.sign) or int(car.sign[1:]) % 2 == 1:
+        return False
+    return is_night(now)
+
+
 def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
-    if is_morning(now):
+    if airport_sign(car.sign):
+        pickup, drop = airport_ends(car.username)
+    elif is_morning(now):
         pickup, drop = morning_ends(car.username)
     elif is_day(now):
         pickup, drop = day_ends(car.username)
     elif is_evening(now):
         pickup, drop = evening_ends(car.username)
+    elif is_night(now):
+        pickup, drop = night_ends(car.username)
     else:
         pickup, drop = journey_ends(car.username)
     name = _next_name(game)
@@ -542,6 +597,9 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
         if car.status == "at_depot":
             car.lat, car.lng = DEPOT
             if now < car.hold_until or not car_may_depart(car):
+                break
+            if _parked_for_quiet(car, now) and _parked_for_quiet(car, car.hold_until):
+                car.hold_until = _quiet_release(now)
                 break
             _start_fare(car, game, car.hold_until)
             continue
