@@ -27,6 +27,8 @@ CIRCLE_RADIUS_KM = 80.467
 EARTH_KM = 6371.0
 KM_PER_MILE = 1.609344
 MPH = 30.0
+STANDING_PENCE = 1500
+FUEL_PENCE_PER_MILE = 20
 CHECK_S = 10
 TRAIL_S = 600
 DEPOT_PAUSE_S = 4
@@ -406,6 +408,27 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             session.close()
 
 
+def driver_share_pence(fare_in: int) -> int:
+    """Driver share is half the fare, in integer pence."""
+    return int(fare_in) // 2
+
+
+def fuel_pence(miles: float) -> int:
+    """Fuel is twenty pence a mile, including the empty return."""
+    return int(round(float(miles) * FUEL_PENCE_PER_MILE))
+
+
+def money_lines(car_count: int, fare_in: int = 0, miles: float = 0.0) -> dict[str, int]:
+    """In-game money for one account. Integer pence. No company totals."""
+    fare = int(fare_in)
+    return {
+        "fare_in": fare,
+        "driver_share": driver_share_pence(fare),
+        "fuel": fuel_pence(miles),
+        "standing": STANDING_PENCE * int(car_count),
+    }
+
+
 def snapshot(username: str, now: float | None = None, session: Session | None = None) -> dict:
     username = normalise_username(username)
     if now is None:
@@ -449,6 +472,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                         "sign": car.sign,
                     }
                 )
+        lines = money_lines(len(cars))
         return {
             "ok": True,
             "username": username,
@@ -458,6 +482,10 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "osrm_unavailable": unavailable,
             "cars": payload_cars,
             "fares": fares,
+            "fare_in": lines["fare_in"],
+            "driver_share": lines["driver_share"],
+            "fuel": lines["fuel"],
+            "standing": lines["standing"],
         }
     finally:
         if own_session:
