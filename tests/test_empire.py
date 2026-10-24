@@ -1,6 +1,8 @@
 """Account fleet. Game rows are never devices, and tests never open the live database."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import os
 import sys
 import tempfile
@@ -1745,6 +1747,66 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertTrue(empire.inside_circle(point), name)
             self.assertGreater(empire.haversine_km(point, empire.BERWICK), 40, name)
             self.assertNotIn("Berwick", name)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_morning_journey_runs_from_homes_toward_town(self) -> None:
+        homes = {empire.place_point(name) for name in empire.HOMES}
+        drops = {empire.place_point(name) for name in empire.MORNING_DROPS}
+        name = None
+        for index in range(80):
+            candidate = f"morn{index}"
+            if empire.morning_ends(candidate) != empire.journey_ends(candidate):
+                name = candidate
+                break
+        self.assertIsNotNone(name)
+        winter = datetime(2023, 11, 15, 8, 0, tzinfo=timezone.utc).timestamp()
+        summer = datetime(2024, 7, 15, 7, 0, tzinfo=timezone.utc).timestamp()
+        opening = datetime(2023, 11, 15, 7, 0, tzinfo=timezone.utc).timestamp()
+        late = datetime(2023, 11, 15, 9, 29, tzinfo=timezone.utc).timestamp()
+        before = datetime(2023, 11, 15, 6, 59, tzinfo=timezone.utc).timestamp()
+        edge = datetime(2023, 11, 15, 9, 30, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(empire.london_clock(winter), (8, 0))
+        self.assertEqual(empire.london_clock(summer), (8, 0))
+        self.assertTrue(empire.is_morning(winter))
+        self.assertTrue(empire.is_morning(summer))
+        self.assertTrue(empire.is_morning(opening))
+        self.assertTrue(empire.is_morning(late))
+        self.assertFalse(empire.is_morning(before))
+        self.assertFalse(empire.is_morning(edge))
+        self.assertEqual(empire.london_clock(datetime(2024, 3, 31, 0, 30, tzinfo=timezone.utc).timestamp()), (0, 30))
+        self.assertEqual(empire.london_clock(datetime(2024, 3, 31, 1, 0, tzinfo=timezone.utc).timestamp()), (2, 0))
+        self.assertEqual(empire.london_clock(datetime(2024, 10, 27, 0, 30, tzinfo=timezone.utc).timestamp()), (1, 30))
+        self.assertEqual(empire.london_clock(datetime(2024, 10, 27, 1, 0, tzinfo=timezone.utc).timestamp()), (1, 0))
+
+        def ends_at(account: str, stamp: float) -> tuple[str, tuple[float, float], tuple[float, float]]:
+            engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+            Base.metadata.create_all(engine)
+            Session = sessionmaker(bind=engine, expire_on_commit=False)
+            with Session() as session:
+                empire.ensure_game(account, stamp, session)
+                empire.tick_all(stamp + 1, session)
+                car = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == "T1")
+                ).one()
+                return car.status, (car.fare_lat, car.fare_lng), (car.drop_lat, car.drop_lng)
+
+        for stamp, account in (
+            (winter, name),
+            (summer, "summermorn"),
+            (opening, "openmorn"),
+            (late, "latemorn"),
+        ):
+            status, pickup, drop = ends_at(account, stamp)
+            self.assertEqual(status, "to_passenger", account)
+            self.assertIn(pickup, homes, account)
+            self.assertIn(drop, drops, account)
+            self.assertEqual((pickup, drop), empire.morning_ends(account), account)
+            self.assertTrue(empire.inside_circle(pickup), account)
+            self.assertTrue(empire.inside_circle(drop), account)
+        _status, early_pickup, early_drop = ends_at("beforemorn", before)
+        _status, edge_pickup, edge_drop = ends_at("edgemorn", edge)
+        self.assertEqual((early_pickup, early_drop), empire.journey_ends("beforemorn"))
+        self.assertEqual((edge_pickup, edge_drop), empire.journey_ends("edgemorn"))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
