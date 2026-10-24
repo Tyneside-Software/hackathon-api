@@ -581,6 +581,25 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertAlmostEqual(stored.lng, -1.5075, places=4)
         self.assertEqual(stored.status, "at_depot")
 
+    def test_tick_does_not_spend_800000(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            before = empire.snapshot("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        before_signs = [car["sign"] for car in before["cars"]]
+        signs = [car["sign"] for car in body["cars"]]
+        self.assertEqual(before_signs, [f"T{index}" for index in range(1, 11)])
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
+        self.assertNotIn("T11", signs)
+        self.assertEqual(before["fare_in"], 0)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertNotEqual(body["fare_in"], before["fare_in"] - 800000)
+        self.assertEqual(body["standing"], empire.STANDING_PENCE * 10)
+        self.assertNotEqual(body["standing"], before["standing"] - 800000)
+        self.assertEqual(body["new_car"], 800000)
+        self.assertEqual(empire.NEW_CAR_PENCE, 800000)
+
     def test_tick_advances_every_account_without_a_browser(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
