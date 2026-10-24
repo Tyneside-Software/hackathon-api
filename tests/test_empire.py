@@ -672,6 +672,20 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(self._car(ada, "T1")["status"], "at_depot")
         self.assertEqual(self._car(bee, "T1")["status"], "to_passenger")
 
+    def test_one_ten_car_fault_does_not_stop_the_other_nine(self) -> None:
+        empire.set_fault(lambda car: car.sign == "T4")
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            with self.assertLogs("hackathon-api", level="ERROR"):
+                empire.tick_all(NOW + 64, session)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(self._car(body, "T4")["status"], "at_depot")
+        for index in range(1, 11):
+            if index == 4:
+                continue
+            self.assertEqual(self._car(body, f"T{index}")["status"], "to_passenger", f"T{index}")
+
     def test_first_departures_are_staggered_by_about_7_seconds(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
