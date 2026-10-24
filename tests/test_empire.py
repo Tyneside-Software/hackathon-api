@@ -923,6 +923,25 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertIn("to_passenger", seen)
         self.assertIn("at_depot", seen)
 
+    def test_each_of_the_ten_uses_one_of_four_statuses(self) -> None:
+        allowed = ("at_depot", "to_passenger", "with_passenger", "returning")
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            driving = empire.snapshot("ada", NOW + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for car in cars:
+                car.status = allowed[(int(car.sign[1:]) - 1) % 4]
+            session.commit()
+            mixed = empire.snapshot("ada", NOW, session)
+        self.assertEqual(len(driving["cars"]), 10)
+        for car in driving["cars"]:
+            self.assertIn(car["status"], allowed)
+        self.assertEqual({car["status"] for car in mixed["cars"]}, set(allowed))
+        for car in mixed["cars"]:
+            self.assertIn(car["status"], allowed)
+
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
         live = ROOT / "hackathon.db"
         before = live.stat().st_mtime if live.exists() else None
