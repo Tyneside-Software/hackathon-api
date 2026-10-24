@@ -36,10 +36,23 @@ DROP_MILES = 3.0
 BEARING_MIN = 160
 BEARING_MAX = 300
 NAMES = ("Mina", "Owen", "Priya", "Jack", "Helen", "Tom")
-CARS = (
-    ("T1", "#f5b942", 0),
-    ("T2", "#38bdf8", STAGGER_S),
-    ("T3", "#4ade80", STAGGER_S * 2),
+CARS = tuple(
+    (f"T{index}", colour, STAGGER_S * (index - 1))
+    for index, colour in enumerate(
+        (
+            "#f5b942",
+            "#38bdf8",
+            "#4ade80",
+            "#94a3b8",
+            "#94a3b8",
+            "#94a3b8",
+            "#94a3b8",
+            "#94a3b8",
+            "#94a3b8",
+            "#94a3b8",
+        ),
+        start=1,
+    )
 )
 STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning")
 BERWICK = (55.7692, -2.0084)
@@ -225,13 +238,12 @@ def point_at(route: list, fraction: float) -> tuple[float, float]:
 
 
 def _cars(session: Session, username: str) -> list[EmpireCar]:
-    return list(
-        session.scalars(select(EmpireCar).where(EmpireCar.username == username).order_by(EmpireCar.sign)).all()
-    )
+    rows = list(session.scalars(select(EmpireCar).where(EmpireCar.username == username)).all())
+    return sorted(rows, key=lambda car: int(car.sign[1:]))
 
 
 def ensure_game(username: str, now: float | None = None, session: Session | None = None) -> EmpireGame:
-    """Create T1, T2, and T3 at the depot when this account has no game yet."""
+    """Create T1 through T10 at the depot when this account has no game yet."""
     username = normalise_username(username)
     own_session = session is None
     if session is None:
