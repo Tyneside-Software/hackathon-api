@@ -513,6 +513,13 @@ class EmpireFleetTests(unittest.TestCase):
             body = empire.snapshot("ada", NOW, session)
         self.assertEqual(body["driver_share"], body["fare_in"] // 2)
 
+    def test_fuel_is_twenty_pence_a_mile(self) -> None:
+        self.assertEqual(empire.FUEL_PENCE_PER_MILE, 20)
+        self.assertEqual(empire.fuel_pence(7), 140)
+        lines = empire.money_lines(10, miles=7)
+        self.assertEqual(lines["fuel"], 140)
+        self.assertIs(type(lines["fuel"]), int)
+
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
