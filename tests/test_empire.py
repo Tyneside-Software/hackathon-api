@@ -2210,7 +2210,7 @@ class EmpireFleetTests(unittest.TestCase):
                 person = people[0]
                 pickup, _drop = ends(account)
                 point = (person["lat"], person["lng"])
-                self.assertEqual(person["sign"], "", stamp)
+                self.assertEqual(person["sign"], "T2", stamp)
                 self.assertIn(person["name"], empire.NAMES, person["name"])
                 self.assertEqual(point, pickup, stamp)
                 self.assertIn(point, places, stamp)
@@ -2234,7 +2234,7 @@ class EmpireFleetTests(unittest.TestCase):
                 empire.tick_all(stamp + 2, session)
                 again = empire.snapshot(account, stamp + 2, session)
                 self.assertEqual(len(again["people"]), 1)
-                self.assertEqual(again["people"][0]["sign"], "")
+                self.assertEqual(again["people"][0]["sign"], "T2")
                 self.assertEqual((again["people"][0]["lat"], again["people"][0]["lng"]), point)
                 self.assertEqual([car["sign"] for car in again["cars"]], [f"T{number}" for number in range(1, 11)])
                 stayed = session.scalars(
@@ -2251,8 +2251,8 @@ class EmpireFleetTests(unittest.TestCase):
             other = empire.snapshot("waitother", NOW + 1, session)
             self.assertEqual(len(one["people"]), 1)
             self.assertEqual(len(other["people"]), 1)
-            self.assertEqual(one["people"][0]["sign"], "")
-            self.assertEqual(other["people"][0]["sign"], "")
+            self.assertEqual(one["people"][0]["sign"], "T2")
+            self.assertEqual(other["people"][0]["sign"], "T2")
             self.assertEqual((one["people"][0]["lat"], one["people"][0]["lng"]), empire.night_ends("waitperson")[0])
             self.assertEqual((other["people"][0]["lat"], other["people"][0]["lng"]), empire.night_ends("waitother")[0])
             self.assertEqual([car["sign"] for car in one["cars"]], [f"T{number}" for number in range(1, 11)])
@@ -2275,8 +2275,8 @@ class EmpireFleetTests(unittest.TestCase):
             other = empire.snapshot("staytwo", NOW + 1, session)
             self.assertEqual(len(after["people"]), 1)
             self.assertEqual(len(other["people"]), 1)
-            self.assertEqual(after["people"][0]["sign"], "")
-            self.assertEqual(other["people"][0]["sign"], "")
+            self.assertEqual(after["people"][0]["sign"], "T2")
+            self.assertEqual(other["people"][0]["sign"], "T2")
             self.assertEqual([car["sign"] for car in after["cars"]], opening)
             self.assertEqual([car["sign"] for car in other["cars"]], opening)
             self.assertNotIn("T11", [car["sign"] for car in after["cars"]])
@@ -2294,9 +2294,57 @@ class EmpireFleetTests(unittest.TestCase):
             empire.tick_all(NOW + 1, session)
             after_buy = empire.snapshot("staybuy", NOW + 1, session)
             self.assertEqual(len(after_buy["people"]), 1)
-            self.assertEqual(after_buy["people"][0]["sign"], "")
+            self.assertEqual(after_buy["people"][0]["sign"], "T2")
             self.assertEqual([car["sign"] for car in after_buy["cars"]], opening + ["T11"])
             self.assertNotIn("T12", [car["sign"] for car in after_buy["cars"]])
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_one_free_taxi_is_allocated_and_a_moving_car_keeps_its_route(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("freetaxi", NOW, session)
+            parked = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "freetaxi", EmpireCar.sign == "T1")
+            ).one()
+            self.assertEqual(parked.status, "at_depot")
+            empire.tick_all(NOW + 1, session)
+            body = empire.snapshot("freetaxi", NOW + 1, session)
+            self.assertEqual(len(body["people"]), 1)
+            self.assertEqual(body["people"][0]["sign"], "T2")
+            self.assertEqual([car["sign"] for car in body["cars"]], [f"T{number}" for number in range(1, 11)])
+            moving = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "freetaxi", EmpireCar.sign == "T1")
+            ).one()
+            free = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "freetaxi", EmpireCar.sign == "T2")
+            ).one()
+            self.assertEqual(moving.status, "to_passenger")
+            self.assertEqual(moving.leg_started, NOW)
+            self.assertGreater(len(moving.route_json), 2)
+            self.assertEqual(free.status, "at_depot")
+            self.assertEqual(free.leg_started, NOW)
+            self.assertEqual(free.route_json, "[]")
+            started = moving.leg_started
+            route = moving.route_json
+            free_started = free.leg_started
+            free_route = free.route_json
+            point = (body["people"][0]["lat"], body["people"][0]["lng"])
+            empire.tick_all(NOW + 2, session)
+            again = empire.snapshot("freetaxi", NOW + 2, session)
+            self.assertEqual(len(again["people"]), 1)
+            self.assertEqual(again["people"][0]["sign"], "T2")
+            self.assertEqual((again["people"][0]["lat"], again["people"][0]["lng"]), point)
+            stayed = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "freetaxi", EmpireCar.sign == "T1")
+            ).one()
+            still_free = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "freetaxi", EmpireCar.sign == "T2")
+            ).one()
+            self.assertEqual(stayed.leg_started, started)
+            self.assertEqual(stayed.route_json, route)
+            self.assertEqual(still_free.status, "at_depot")
+            self.assertEqual(still_free.leg_started, free_started)
+            self.assertEqual(still_free.route_json, free_route)
+            self.assertEqual([car["sign"] for car in again["cars"]], [f"T{number}" for number in range(1, 11)])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
