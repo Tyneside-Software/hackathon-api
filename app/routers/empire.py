@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..dependencies import get_current_active_user
-from ..empire import buy_car, set_loiter, snapshot
+from ..empire import buy_car, cancel_job, set_loiter, snapshot
 from ..models import User
 
 router = APIRouter()
@@ -15,6 +15,10 @@ router = APIRouter()
 
 class EmpireBuy(BaseModel):
     pence: int
+
+
+class EmpireCancel(BaseModel):
+    sign: str
 
 
 class EmpireLoiter(BaseModel):
@@ -39,6 +43,17 @@ def empire_buy(
     if sign is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="800000 pence buys the next car")
     return {"sign": sign}
+
+
+@router.post("/v1/empire/cancel")
+def empire_cancel(
+    body: EmpireCancel,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict:
+    """Cancel a passenger job before the car moves. No fare and no fuel."""
+    if not cancel_job(current_user.username, body.sign):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That job is not waiting to move")
+    return snapshot(current_user.username)
 
 
 @router.post("/v1/empire/loiter")

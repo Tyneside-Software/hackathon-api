@@ -673,6 +673,79 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertNotIn(1240, (after["cash_pence"], after["fare_in"], other["cash_pence"]))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_post_cancel_before_the_car_moves_adds_no_fare_and_no_fuel(self) -> None:
+        import time
+
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        shire = empire.place_point("Shiremoor")
+        cobalt = empire.place_point("Cobalt")
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/v1/empire/cancel", json={"sign": "T1"}).status_code, 401)
+            self.assertEqual(
+                client.post("/register", json={"username": "stillpost", "password": "password1"}).status_code,
+                201,
+            )
+            token = client.post("/login", json={"username": "stillpost", "password": "password1"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            self.assertEqual(client.get("/v1/empire", headers=headers).status_code, 200)
+            started = time.time()
+            with SessionLocal() as session:
+                game = session.get(EmpireGame, "stillpost")
+                game.fare_in = 1040
+                game.miles_driven = 3
+                game.cash_pence = 40
+                car = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == "stillpost", EmpireCar.sign == "T1")
+                ).one()
+                car.status = "to_passenger"
+                car.passenger = "Mina"
+                car.fare_name = "Mina"
+                car.lat, car.lng = shire
+                car.fare_lat, car.fare_lng = shire
+                car.drop_lat, car.drop_lng = cobalt
+                car.route_json = json.dumps([[shire[0], shire[1]], [cobalt[0], cobalt[1]]])
+                car.duration_s = 100000
+                car.leg_started = started
+                session.commit()
+            cancelled = client.post("/v1/empire/cancel", headers=headers, json={"sign": "T1"})
+            body = cancelled.json()
+            again = client.post("/v1/empire/cancel", headers=headers, json={"sign": "T1"})
+            missing = client.post("/v1/empire/cancel", headers=headers, json={"sign": "T99"})
+            later = client.get("/v1/empire", headers=headers).json()
+            with SessionLocal() as session:
+                game = session.get(EmpireGame, "stillpost")
+                stored_miles = game.miles_driven
+                stored_fare = game.fare_in
+                stored_cash = game.cash_pence
+        parked = next(car for car in body["cars"] if car["sign"] == "T1")
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(body["fare_in"], 1040)
+        self.assertEqual(body["cash_pence"], 40)
+        self.assertEqual(body["driver_share"], 520)
+        self.assertEqual(stored_miles, 3)
+        self.assertEqual(stored_fare, 1040)
+        self.assertEqual(stored_cash, 40)
+        self.assertEqual(parked["status"], "at_depot")
+        self.assertEqual(parked["job"], "waiting")
+        self.assertEqual(parked["passenger"], "")
+        self.assertEqual(parked["trip_pence"], 0)
+        self.assertEqual(parked["pickup"], "")
+        self.assertEqual(parked["drop"], "")
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(again.status_code, 400)
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(later["fare_in"], 1040)
+        self.assertEqual(later["cash_pence"], 40)
+        self.assertNotEqual(body["fare_in"], 800000)
+        self.assertNotEqual(body["fuel"], 800000)
+        self.assertNotIn(2860, (body["fare_in"], body["fuel"], body["cash_pence"], parked["trip_pence"]))
+        self.assertNotIn(1130, (body["fare_in"], body["fuel"], body["cash_pence"]))
+        self.assertNotIn(1240, (body["fare_in"], body["fuel"], body["cash_pence"]))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_post_buy_without_a_token_adds_no_car(self) -> None:
         from fastapi.testclient import TestClient
 
@@ -4126,6 +4199,194 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertNotIn(2860, (body["fare_in"], firms["north"]["fare_in"], firms["south"]["fare_in"]))
         self.assertNotIn(1130, (body["fare_in"], firms["north"]["fare_in"], firms["south"]["fare_in"]))
         self.assertNotIn(1240, (body["fare_in"], firms["north"]["fare_in"], firms["south"]["fare_in"], hired, south_pence))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_a_job_cancelled_before_the_car_moves_adds_no_fare_and_no_fuel(self) -> None:
+        shire = empire.place_point("Shiremoor")
+        cobalt = empire.place_point("Cobalt")
+        route = [[shire[0], shire[1]], [cobalt[0], cobalt[1]]]
+        self.assertGreater(empire.haversine_km(shire, cobalt) * 0.5, 0.05)
+        self.assertLess(empire.haversine_km(shire, cobalt) / 360, 0.05)
+
+        def collecting(car: EmpireCar, started: float) -> None:
+            car.status = "to_passenger"
+            car.job = "collecting"
+            car.passenger = "Mina"
+            car.fare_name = "Mina"
+            car.lat, car.lng = shire
+            car.fare_lat, car.fare_lng = shire
+            car.drop_lat, car.drop_lng = cobalt
+            car.route_json = json.dumps(route)
+            car.duration_s = 360
+            car.leg_started = started
+            car.hold_until = started
+
+        with self.Session() as session:
+            game = empire.ensure_game("stilljob", NOW, session)
+            empire.ensure_game("stilloth", NOW, session)
+            game.fare_in = 1040
+            game.miles_driven = 3
+            game.cash_pence = 40
+            session.commit()
+            first = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T1")
+            ).one()
+            second = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T2")
+            ).one()
+            collecting(first, NOW)
+            collecting(second, NOW)
+            off = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T9")
+            ).one()
+            collecting(off, NOW)
+            off.lat, off.lng = cobalt
+            session.commit()
+            self.assertTrue(empire.cancel_job("stilljob", "T1", NOW, session))
+            self.assertFalse(empire.cancel_job("stilljob", "", NOW, session))
+            self.assertFalse(empire.cancel_job("stilljob", "T99", NOW, session))
+            self.assertFalse(empire.cancel_job("stilljob", "T9", NOW, session))
+            north = session.scalars(
+                select(EmpireCar).where(
+                    EmpireCar.username == empire.firm_key("stilljob", "north"),
+                    EmpireCar.sign == "N1",
+                )
+            ).one()
+            collecting(north, NOW)
+            session.commit()
+            self.assertFalse(empire.cancel_job("stilljob", "N1", NOW, session))
+            self.assertEqual(north.status, "to_passenger")
+            self.assertEqual(north.passenger, "Mina")
+            body = empire.snapshot("stilljob", NOW, session)
+            other = empire.snapshot("stilloth", NOW, session)
+            self.assertFalse(empire.cancel_job("stilljob", "T2", NOW + 180, session))
+            self.assertEqual(second.status, "to_passenger")
+            self.assertEqual(second.passenger, "Mina")
+            self.assertEqual(second.route_json, json.dumps(route))
+            self.assertEqual(second.duration_s, 360)
+            self.assertEqual(off.status, "to_passenger")
+            self.assertEqual(off.passenger, "Mina")
+            fresh = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T8")
+            ).one()
+            collecting(fresh, NOW)
+            session.commit()
+            self.assertTrue(empire.cancel_job("stilljob", "T8", NOW + 1, session))
+            third = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T3")
+            ).one()
+            self.assertEqual(third.status, "at_depot")
+            person = empire.EmpirePerson(
+                username="stilljob",
+                name="Owen",
+                lat=shire[0],
+                lng=shire[1],
+                drop_lat=cobalt[0],
+                drop_lng=cobalt[1],
+                sign="T3",
+                arrived=NOW,
+            )
+            session.add(person)
+            session.flush()
+            self.assertTrue(empire.cancel_job("stilljob", "T3", NOW, session))
+            self.assertEqual(person.sign, "")
+            self.assertEqual(third.status, "at_depot")
+            carried = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T4")
+            ).one()
+            carried.status = "with_passenger"
+            carried.passenger = "Priya"
+            carried.fare_name = "Priya"
+            carried.lat, carried.lng = shire
+            carried.route_json = json.dumps(route)
+            carried.duration_s = 360
+            carried.leg_started = NOW
+            empty = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T5")
+            ).one()
+            empty.status = "to_passenger"
+            empty.passenger = ""
+            empty.fare_name = ""
+            empty.lat, empty.lng = shire
+            empty.route_json = json.dumps(route)
+            empty.duration_s = 360
+            empty.leg_started = NOW
+            hunting = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T6")
+            ).one()
+            hunting.status = "to_better_spot"
+            hunting.passenger = ""
+            hunting.lat, hunting.lng = shire
+            hunting.route_json = json.dumps(route)
+            hunting.duration_s = 360
+            hunting.leg_started = NOW
+            home = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "stilljob", EmpireCar.sign == "T7")
+            ).one()
+            home.status = "returning"
+            home.passenger = ""
+            home.lat, home.lng = shire
+            home.route_json = json.dumps(route)
+            home.duration_s = 360
+            home.leg_started = NOW
+            session.commit()
+            self.assertFalse(empire.cancel_job("stilljob", "T4", NOW, session))
+            self.assertFalse(empire.cancel_job("stilljob", "T5", NOW, session))
+            self.assertFalse(empire.cancel_job("stilljob", "T6", NOW, session))
+            self.assertFalse(empire.cancel_job("stilljob", "T7", NOW, session))
+            self.assertEqual(carried.status, "with_passenger")
+            self.assertEqual(carried.passenger, "Priya")
+            self.assertEqual(empty.status, "to_passenger")
+            self.assertEqual(hunting.status, "to_better_spot")
+            self.assertEqual(home.status, "returning")
+            self.assertEqual(game.fare_in, 1040)
+            self.assertEqual(game.miles_driven, 3)
+            self.assertEqual(game.cash_pence, 40)
+            later = empire.snapshot("stilljob", NOW + 180, session)
+            moving = sum(
+                empire.driven_miles(car, NOW + 180)
+                for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "stilljob")).all()
+                if not (car.firm or "")
+            )
+            released = empire.snapshot("stilljob", NOW, session)
+        parked = self._car(body, "T1")
+        waited = self._car(body, "T2")
+        self.assertEqual(parked["status"], "at_depot")
+        self.assertEqual(parked["job"], "waiting")
+        self.assertEqual(parked["passenger"], "")
+        self.assertEqual(parked["trip_pence"], 0)
+        self.assertEqual(parked["pickup"], "")
+        self.assertEqual(parked["drop"], "")
+        self.assertEqual(waited["status"], "to_passenger")
+        self.assertEqual(body["fare_in"], 1040)
+        self.assertEqual(body["driver_share"], 520)
+        self.assertEqual(body["fuel"], empire.fuel_pence(3))
+        self.assertEqual(body["cash_pence"], 40)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(other["fare_in"], 0)
+        self.assertEqual(other["fuel"], 0)
+        self.assertEqual(other["cash_pence"], 0)
+        self.assertEqual(len(other["cars"]), 10)
+        self.assertEqual(self._car(later, "T2")["status"], "to_passenger")
+        self.assertEqual(self._car(later, "T8")["status"], "at_depot")
+        self.assertEqual(self._car(later, "T8")["passenger"], "")
+        self.assertEqual(self._car(later, "T8")["trip_pence"], 0)
+        self.assertEqual(self._car(later, "T9")["status"], "to_passenger")
+        self.assertEqual(later["fare_in"], 1040)
+        self.assertEqual(later["cash_pence"], 40)
+        self.assertEqual(later["fuel"], empire.fuel_pence(3 + moving))
+        self.assertGreater(moving, 0)
+        self.assertEqual(later["driver_share"], 520)
+        self.assertEqual(len(later["cars"]), 10)
+        owen = next(row for row in released["people"] if row["name"] == "Owen")
+        self.assertEqual(owen["sign"], "")
+        for firm in later["firms"]:
+            self.assertEqual(firm["bookings"], [])
+        self.assertNotEqual(later["fare_in"], 800000)
+        self.assertNotEqual(later["fuel"], 800000)
+        self.assertNotIn(2860, (later["fare_in"], later["fuel"], later["cash_pence"], parked["trip_pence"]))
+        self.assertNotIn(1130, (later["fare_in"], later["fuel"], later["cash_pence"]))
+        self.assertNotIn(1240, (later["fare_in"], later["fuel"], later["cash_pence"]))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
 
