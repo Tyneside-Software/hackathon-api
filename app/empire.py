@@ -24,6 +24,8 @@ from .models import EmpireCar, EmpireGame, EmpirePerson
 log = logging.getLogger("hackathon-api")
 
 DEPOT = (55.0367, -1.5075)
+EMPTY_MOVE_MILES = 2
+EMPTY_MOVE_KM = EMPTY_MOVE_MILES * 1.609344
 CIRCLE_CENTRE = (54.9783, -1.6178)
 CIRCLE_RADIUS_KM = 80.467
 LOITER_MIN_KM = 0.2
@@ -808,6 +810,34 @@ def strategic_spot(
     return pickup
 
 
+def nearby_empty_spot(
+    origin: tuple[float, float],
+    username: str,
+    sign: str,
+    now: float,
+    taken: tuple[tuple[float, float], ...] = (),
+) -> tuple[float, float] | None:
+    """A published place within two miles. None when nothing free is that close.
+
+    The seed includes the spell, so a test replays the place and the live tick can vary.
+    """
+    blocked = {(round(point[0], 5), round(point[1], 5)) for point in taken}
+    near: list[tuple[float, float]] = []
+    for _name, lat, lng in PLACES:
+        point = (float(lat), float(lng))
+        if haversine_km(origin, point) > EMPTY_MOVE_KM or haversine_km(origin, point) <= 0.05:
+            continue
+        if not inside_circle(point):
+            continue
+        if (round(point[0], 5), round(point[1], 5)) in blocked:
+            continue
+        near.append(point)
+    if not near:
+        return None
+    rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|near-{sign}"))
+    return rng.choice(near)
+
+
 def _account_of(username: str) -> str:
     head, sep, _tail = (username or "").partition("|")
     return head if sep else (username or "")
@@ -1345,9 +1375,37 @@ def _check_in(car: EmpireCar, now: float) -> None:
     car.trail_json = json.dumps(trail)
 
 
+def _stop_far_empty_leg(car: EmpireCar, now: float) -> None:
+    """A passengerless empty leg whose end is still more than two miles away stops here."""
+    here = (float(car.lat), float(car.lng))
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+    car.status = "at_depot"
+    car.lat, car.lng = here
+    car.route_json = json.dumps([[here[0], here[1]], [here[0], here[1]]])
+    car.duration_s = 0.0
+    car.leg_started = now
+    car.osrm = True
+    car.hold_until = now
+
+
 def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
     if _fault is not None and _fault(car):
         raise RuntimeError("empire car fault")
+    if car.status == "to_better_spot" and not car.passenger and not car.fare_name:
+        route = _loads(car.route_json, [])
+        if len(route) >= 2:
+            here = (float(car.lat), float(car.lng))
+            end = (float(route[-1][0]), float(route[-1][1]))
+            if haversine_km(here, end) > EMPTY_MOVE_KM:
+                _stop_far_empty_leg(car, now)
+                _store_job(car)
+                _check_in(car, now)
+                return
     for _ in range(48):
         if car.status == "at_depot":
             home = car_depot(car)
@@ -1517,8 +1575,10 @@ def _travel_to_a_better_spot(
                     _sit_on_break(car, now, depot)
                 _store_job(car)
                 continue
-            spot = strategic_spot(fleet_name, car.sign, now, tuple(taken))
-            if not inside_circle(spot) or haversine_km(start, spot) <= 0.05:
+            spot = nearby_empty_spot(start, fleet_name, car.sign, now, tuple(taken))
+            if spot is None or not inside_circle(spot) or haversine_km(start, spot) > EMPTY_MOVE_KM:
+                continue
+            if haversine_km(start, spot) <= 0.05:
                 continue
             taken.append(spot)
             car.passenger = ""

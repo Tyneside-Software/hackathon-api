@@ -1816,7 +1816,8 @@ class EmpireFleetTests(unittest.TestCase):
                 route = empire._loads(car.route_json, [])
                 end = (route[-1][0], route[-1][1])
                 self.assertNotEqual(end, pickup, car.sign)
-                self.assertEqual(end, empire.strategic_spot("ada", car.sign, NOW + 64), car.sign)
+                self.assertEqual(end, empire.nearby_empty_spot(empire.DEPOT, "ada", car.sign, NOW + 64), car.sign)
+                self.assertLessEqual(empire.haversine_km(empire.DEPOT, end), empire.EMPTY_MOVE_KM, car.sign)
 
     def test_import_does_not_start_the_clock_or_open_the_live_database(self) -> None:
         from fastapi.testclient import TestClient
@@ -2998,7 +2999,7 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(mover.fare_name, "")
             self.assertEqual((mover.fare_lat, mover.fare_lng, mover.drop_lat, mover.drop_lng), (0.0, 0.0, 0.0, 0.0))
             self.assertNotEqual(mover.status, "with_passenger")
-            spot = empire.strategic_spot("emptymove", "T2", NOW + 64)
+            spot = empire.nearby_empty_spot(empire.DEPOT, "emptymove", "T2", NOW + 64)
             self.assertNotEqual(spot, drawn)
             if mover.status == "to_better_spot":
                 route = empire._loads(mover.route_json, [])
@@ -3028,7 +3029,8 @@ class EmpireFleetTests(unittest.TestCase):
                 self.assertEqual(other.status, "to_better_spot")
                 self.assertEqual(other.job, "travelling to a better spot")
                 other_route = empire._loads(other.route_json, [])
-                self.assertEqual((other_route[-1][0], other_route[-1][1]), empire.strategic_spot("emptymove", "T4", NOW + 64))
+                self.assertEqual((other_route[-1][0], other_route[-1][1]), empire.nearby_empty_spot(empire.DEPOT, "emptymove", "T4", NOW + 64))
+                self.assertLessEqual(empire.haversine_km(empire.DEPOT, (other_route[-1][0], other_route[-1][1])), empire.EMPTY_MOVE_KM)
                 self.assertNotEqual((other_route[-1][0], other_route[-1][1]), drawn)
             self.assertEqual(kept.route_json, kept_route)
             self.assertEqual(kept.leg_started, kept_started)
@@ -3329,8 +3331,9 @@ class EmpireFleetTests(unittest.TestCase):
         ten_route = empire._loads(ten.route_json, [])
         nine_end = (nine_route[-1][0], nine_route[-1][1])
         ten_end = (ten_route[-1][0], ten_route[-1][1])
-        self.assertEqual(nine_end, first)
-        self.assertEqual(ten_end, own)
+        self.assertEqual(nine_end, empire.nearby_empty_spot(empire.DEPOT, account, "T9", now))
+        self.assertLessEqual(empire.haversine_km(empire.DEPOT, nine_end), empire.EMPTY_MOVE_KM)
+        self.assertLessEqual(empire.haversine_km(empire.DEPOT, ten_end), empire.EMPTY_MOVE_KM)
         self.assertNotEqual(nine_end, ten_end)
         self.assertNotEqual(nine_route, ten_route)
         self.assertNotEqual(nine_end, (body["people"][0]["lat"], body["people"][0]["lng"]))
@@ -4749,6 +4752,44 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertNotIn(1130, (during["cash_pence"], during["fare_in"], after["fare_in"], later["fare_in"]))
         self.assertNotIn(1240, (during["cash_pence"], during["fare_in"], after["fare_in"], later["fare_in"]))
         self.assertNotIn(800000, (after["fare_in"], later["fare_in"], fare["trip_pence"]))
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_an_empty_move_stays_within_two_miles_and_a_far_leg_stops(self) -> None:
+        airport = empire.place_point("Newcastle Airport")
+        monument = empire.place_point("Grey's Monument")
+        spot = empire.nearby_empty_spot(empire.DEPOT, "near", "T1", NOW)
+        self.assertIsNotNone(spot)
+        self.assertLessEqual(empire.haversine_km(empire.DEPOT, spot), empire.EMPTY_MOVE_KM)
+        self.assertNotEqual(spot, airport)
+        self.assertNotEqual(spot, monument)
+        self.assertEqual(spot, empire.nearby_empty_spot(empire.DEPOT, "near", "T1", NOW))
+        self.assertIsNone(empire.nearby_empty_spot(airport, "near", "T1", NOW))
+        with self.Session() as session:
+            empire.ensure_game("near", NOW, session)
+            game = session.get(EmpireGame, "near")
+            car = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "near", EmpireCar.sign == "T1")
+            ).one()
+            car.status = "to_better_spot"
+            car.passenger = ""
+            car.fare_name = ""
+            car.lat, car.lng = empire.DEPOT
+            car.route_json = json.dumps(
+                [[empire.DEPOT[0], empire.DEPOT[1]], [airport[0], airport[1]]]
+            )
+            car.duration_s = 5000
+            car.leg_started = NOW
+            car.hold_until = NOW
+            car.job = "travelling to a better spot"
+            session.commit()
+            empire.advance_car(car, game, NOW + 1)
+            session.commit()
+            stopped = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "near", EmpireCar.sign == "T1")
+            ).one()
+        self.assertEqual(stopped.status, "at_depot")
+        self.assertLess(empire.haversine_km((stopped.lat, stopped.lng), empire.DEPOT), 0.2)
+        self.assertGreater(empire.haversine_km((stopped.lat, stopped.lng), airport), empire.EMPTY_MOVE_KM)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
 
