@@ -112,6 +112,7 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("loiter_lng", game_columns)
         self.assertIn("loiter_km", game_columns)
         self.assertIn("fare_in", game_columns)
+        self.assertIn("miles_driven", game_columns)
         car_columns = {col["name"] for col in insp.get_columns("empire_cars")}
         self.assertIn("job", car_columns)
         self.assertIn("firm", car_columns)
@@ -145,6 +146,40 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("cash_pence", columns)
         self.assertEqual(row.username, "ada")
         self.assertEqual(row.cash_pence, 0)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_miles_column_is_added_without_wiping_the_game(self) -> None:
+        from app.database import ensure_empire_miles_column
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_games ("
+                    "username VARCHAR(64) PRIMARY KEY, created_at VARCHAR(64), "
+                    "name_index INTEGER, cash_pence INTEGER, fare_in INTEGER)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO empire_games (username, created_at, name_index, cash_pence, fare_in) "
+                    "VALUES ('ada', '1', 0, 40, 1040)"
+                )
+            )
+        ensure_empire_miles_column(engine)
+        ensure_empire_miles_column(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_games")}
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT username, cash_pence, fare_in, miles_driven FROM empire_games")
+            ).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_games")).scalar()
+        self.assertIn("miles_driven", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.cash_pence, 40)
+        self.assertEqual(row.fare_in, 1040)
+        self.assertEqual(row.miles_driven, 0)
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
@@ -1728,6 +1763,58 @@ class EmpireFleetTests(unittest.TestCase):
     def test_fuel_is_twenty_pence_a_mile(self) -> None:
         self.assertEqual(empire.FUEL_PENCE_PER_MILE, 20)
         self.assertEqual(empire.fuel_pence(7), 140)
+        three = empire.destination(empire.DEPOT, 80, 3.0)
+        one = empire.destination(empire.DEPOT, 80, 1.0)
+        with self.Session() as session:
+            game = empire.ensure_game("milefuel", NOW, session)
+            empire.ensure_game("mileother", NOW, session)
+            car = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "milefuel", EmpireCar.sign == "T1")
+            ).one()
+            car.status = "with_passenger"
+            car.passenger = "Mina"
+            car.route_json = json.dumps([[empire.DEPOT[0], empire.DEPOT[1]], [three[0], three[1]]])
+            car.duration_s = 360
+            car.leg_started = NOW
+            empire.advance_car(car, game, NOW + 361)
+            session.commit()
+            done = empire.snapshot("milefuel", NOW + 361, session)
+            self.assertEqual(done["fuel"], empire.fuel_pence(3))
+            second = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "milefuel", EmpireCar.sign == "T2")
+            ).one()
+            second.status = "to_better_spot"
+            second.route_json = json.dumps([[empire.DEPOT[0], empire.DEPOT[1]], [one[0], one[1]]])
+            second.duration_s = 120
+            second.leg_started = NOW
+            session.commit()
+            half = empire.snapshot("milefuel", NOW + 60, session)
+            rival = session.scalars(
+                select(EmpireCar).where(
+                    EmpireCar.username == empire.firm_key("milefuel", "north"),
+                    EmpireCar.sign == "N1",
+                )
+            ).one()
+            rival.status = "with_passenger"
+            rival.firm = "north"
+            rival.passenger = "Priya"
+            rival.route_json = json.dumps([[empire.DEPOT[0], empire.DEPOT[1]], [three[0], three[1]]])
+            rival.duration_s = 360
+            rival.leg_started = NOW
+            empire.advance_car(rival, game, NOW + 361)
+            session.commit()
+            self.assertEqual(empire.buy_car("milefuel", 800000, NOW, session), "T11")
+            bought = empire.snapshot("milefuel", NOW + 60, session)
+            other = empire.snapshot("mileother", NOW + 60, session)
+        self.assertEqual(empire.FUEL_PENCE_PER_MILE, 20)
+        self.assertEqual(half["fuel"], empire.fuel_pence(3.5))
+        self.assertEqual(bought["fuel"], half["fuel"])
+        self.assertNotEqual(bought["fuel"], 800000)
+        self.assertEqual(bought["new_car"], 800000)
+        self.assertEqual(len(bought["cars"]), 11)
+        self.assertEqual(other["fuel"], 0)
+        self.assertEqual(other["cash_pence"], 0)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
         lines = empire.money_lines(10, miles=7)
         self.assertEqual(lines["fuel"], 140)
         self.assertIs(type(lines["fuel"]), int)
