@@ -352,10 +352,16 @@ def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tu
     car.lat, car.lng = point_at(route, 0)
 
 
+def journey_ends(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Pickup and drop are two places. They are not a ring around the depot."""
+    index = raw_bearing(username) % len(PLACES)
+    pickup = PLACES[index]
+    drop = PLACES[(index + 11) % len(PLACES)]
+    return (pickup[1], pickup[2]), (drop[1], drop[2])
+
+
 def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
-    bearing = trip_bearing(car.username)
-    pickup = destination(DEPOT, bearing, PICKUP_MILES)
-    drop = destination(DEPOT, bearing, DROP_MILES)
+    pickup, drop = journey_ends(car.username)
     name = _next_name(game)
     car.passenger = name
     car.fare_name = name

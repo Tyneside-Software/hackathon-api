@@ -25,6 +25,14 @@ empire.set_route_fn(lambda start, end: None)
 NOW = 1_700_000_000
 
 
+def _ring(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    bearing = empire.trip_bearing(username)
+    return (
+        empire.destination(empire.DEPOT, bearing, 1.2),
+        empire.destination(empire.DEPOT, bearing, 3.0),
+    )
+
+
 class EmpireTableTests(unittest.TestCase):
     def test_empire_tables_have_no_device_id(self) -> None:
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
@@ -655,11 +663,14 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertIsNotNone(car)
         pickup = (car.fare_lat, car.fare_lng)
         drop = (car.drop_lat, car.drop_lng)
-        pickup_miles = empire.haversine_km(empire.DEPOT, pickup) / empire.KM_PER_MILE
-        drop_miles = empire.haversine_km(empire.DEPOT, drop) / empire.KM_PER_MILE
+        places = {(lat, lng) for _name, lat, lng in empire.PLACES}
+        ring_pickup, ring_drop = _ring("ada")
         self.assertEqual(car.status, "to_passenger")
-        self.assertAlmostEqual(pickup_miles, 1.2, delta=0.05)
-        self.assertGreater(drop_miles, pickup_miles)
+        self.assertIn(pickup, places)
+        self.assertIn(drop, places)
+        self.assertNotEqual(pickup, drop)
+        self.assertNotEqual(pickup, ring_pickup)
+        self.assertNotEqual(drop, ring_drop)
         self.assertTrue(empire.inside_circle(pickup))
         self.assertTrue(empire.inside_circle(drop))
         self.assertEqual(sorted(stored, key=lambda sign: int(sign[1:])), [f"T{index}" for index in range(1, 12)])
@@ -804,7 +815,7 @@ class EmpireFleetTests(unittest.TestCase):
         for i in range(80):
             a = f"left{i}"
             b = f"right{i}"
-            if empire.trip_bearing(a) != empire.trip_bearing(b):
+            if empire.journey_ends(a)[0] != empire.journey_ends(b)[0]:
                 left, right = a, b
                 break
         self.assertIsNotNone(left)
@@ -966,7 +977,7 @@ class EmpireFleetTests(unittest.TestCase):
         for index in range(80):
             one_name = f"bear{index}a"
             other_name = f"bear{index}b"
-            if empire.trip_bearing(one_name) != empire.trip_bearing(other_name):
+            if empire.journey_ends(one_name)[0] != empire.journey_ends(other_name)[0]:
                 left, right = one_name, other_name
                 break
         self.assertIsNotNone(left)
@@ -982,8 +993,8 @@ class EmpireFleetTests(unittest.TestCase):
             other = empire.snapshot(right, NOW + 64, session)
             left_cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == left)).all())
             right_cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == right)).all())
-        expected_left = empire.destination(empire.DEPOT, empire.trip_bearing(left), empire.PICKUP_MILES)
-        expected_right = empire.destination(empire.DEPOT, empire.trip_bearing(right), empire.PICKUP_MILES)
+        expected_left = empire.journey_ends(left)[0]
+        expected_right = empire.journey_ends(right)[0]
         self.assertEqual(len(left_cars), 10)
         self.assertEqual(len(right_cars), 10)
         self.assertEqual(len(one["fares"]), 10)
@@ -1161,10 +1172,12 @@ class EmpireFleetTests(unittest.TestCase):
             car = session.scalars(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T1")).one()
             pickup = (car.fare_lat, car.fare_lng)
             drop = (car.drop_lat, car.drop_lng)
-        pickup_miles = empire.haversine_km(empire.DEPOT, pickup) / empire.KM_PER_MILE
-        drop_miles = empire.haversine_km(empire.DEPOT, drop) / empire.KM_PER_MILE
-        self.assertAlmostEqual(pickup_miles, 1.2, delta=0.05)
-        self.assertGreater(drop_miles, pickup_miles)
+        places = {(lat, lng) for _name, lat, lng in empire.PLACES}
+        ring_pickup, ring_drop = _ring("ada")
+        self.assertIn(pickup, places)
+        self.assertIn(drop, places)
+        self.assertNotEqual(pickup, ring_pickup)
+        self.assertNotEqual(drop, ring_drop)
         self.assertTrue(empire.inside_circle(pickup))
         self.assertTrue(empire.inside_circle(drop))
         self.assertGreater(empire.haversine_km(pickup, empire.BERWICK), 40)
@@ -1186,28 +1199,22 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertGreater(empire.haversine_km(pickup, empire.BERWICK), 40)
             self.assertGreater(empire.haversine_km(drop, empire.BERWICK), 40)
 
-    def test_ten_car_drop_off_is_further_than_the_pickup(self) -> None:
-        bearing = empire.trip_bearing("ada")
-        expected_pickup = empire.destination(empire.DEPOT, bearing, empire.PICKUP_MILES)
-        expected_drop = empire.destination(empire.DEPOT, bearing, empire.DROP_MILES)
+    def test_ten_car_ends_are_places_not_the_depot_ring(self) -> None:
+        expected_pickup, expected_drop = empire.journey_ends("ada")
+        ring_pickup, ring_drop = _ring("ada")
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
             empire.tick_all(NOW + 64, session)
             cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
         self.assertEqual(len(cars), 10)
-        self.assertEqual(empire.PICKUP_MILES, 1.2)
-        self.assertGreater(empire.DROP_MILES, empire.PICKUP_MILES)
+        self.assertNotEqual(expected_pickup, ring_pickup)
+        self.assertNotEqual(expected_drop, ring_drop)
         for car in cars:
             pickup = (car.fare_lat, car.fare_lng)
             drop = (car.drop_lat, car.drop_lng)
-            pickup_miles = empire.haversine_km(empire.DEPOT, pickup) / empire.KM_PER_MILE
-            drop_miles = empire.haversine_km(empire.DEPOT, drop) / empire.KM_PER_MILE
-            self.assertAlmostEqual(pickup_miles, 1.2, delta=0.05, msg=car.sign)
-            self.assertGreater(drop_miles, pickup_miles, car.sign)
-            self.assertAlmostEqual(car.fare_lat, expected_pickup[0], places=4, msg=car.sign)
-            self.assertAlmostEqual(car.fare_lng, expected_pickup[1], places=4, msg=car.sign)
-            self.assertAlmostEqual(car.drop_lat, expected_drop[0], places=4, msg=car.sign)
-            self.assertAlmostEqual(car.drop_lng, expected_drop[1], places=4, msg=car.sign)
+            self.assertEqual(pickup, expected_pickup, car.sign)
+            self.assertEqual(drop, expected_drop, car.sign)
+            self.assertNotEqual(pickup, drop, car.sign)
             self.assertTrue(empire.inside_circle(pickup), car.sign)
             self.assertTrue(empire.inside_circle(drop), car.sign)
 
