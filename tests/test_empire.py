@@ -2550,6 +2550,63 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual([car["sign"] for car in home["cars"]], [f"T{number}" for number in range(1, 11)])
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_the_allocated_taxi_runs_the_passenger_trip_when_it_arrives(self) -> None:
+        pickup, drop = empire.hour_ends("arrivedtrip", NOW)
+        self.assertNotEqual(pickup, drop)
+        self.assertTrue(empire.inside_circle(pickup))
+        self.assertTrue(empire.inside_circle(drop))
+        with self.Session() as session:
+            empire.ensure_game("arrivedtrip", NOW, session)
+            empire.tick_all(NOW + 1, session)
+            early = empire.snapshot("arrivedtrip", NOW + 1, session)
+            self.assertEqual(early["people"][0]["sign"], "T2")
+            self.assertEqual(self._car(early, "T2")["status"], "at_depot")
+            self.assertEqual(early["fare_in"], 0)
+            empire.tick_all(NOW + 64, session)
+            moving = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "arrivedtrip", EmpireCar.sign == "T2")
+            ).one()
+            spare = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "arrivedtrip", EmpireCar.sign == "T4")
+            ).one()
+            self.assertEqual(moving.status, "to_better_spot")
+            self.assertEqual(moving.passenger, "")
+            self.assertEqual(moving.job, "travelling to a better spot")
+            self.assertEqual(spare.status, "to_better_spot")
+            self.assertEqual(spare.passenger, "")
+            arrive = moving.leg_started + moving.duration_s + 1
+            empire.tick_all(arrive, session)
+            body = empire.snapshot("arrivedtrip", arrive, session)
+            arrived = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "arrivedtrip", EmpireCar.sign == "T2")
+            ).one()
+            idle = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "arrivedtrip", EmpireCar.sign == "T4")
+            ).one()
+            self.assertEqual([car["sign"] for car in body["cars"]], [f"T{number}" for number in range(1, 11)])
+            self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
+            self.assertEqual(len(body["people"]), 1)
+            self.assertEqual(body["people"][0]["sign"], "T2")
+            self.assertEqual(arrived.status, "with_passenger")
+            self.assertEqual(arrived.job, "carrying")
+            self.assertEqual(arrived.passenger, body["people"][0]["name"])
+            self.assertTrue(arrived.passenger)
+            self.assertEqual(arrived.fare_name, "")
+            self.assertEqual((arrived.fare_lat, arrived.fare_lng), pickup)
+            self.assertEqual((arrived.drop_lat, arrived.drop_lng), drop)
+            self.assertNotEqual((arrived.fare_lat, arrived.fare_lng), (arrived.drop_lat, arrived.drop_lng))
+            self.assertTrue(empire.inside_circle((arrived.drop_lat, arrived.drop_lng)))
+            self.assertTrue(empire.inside_circle((arrived.lat, arrived.lng)))
+            self.assertNotIn("T2", {fare["sign"] for fare in body["fares"]})
+            self.assertEqual(body["fare_in"], 0)
+            self.assertNotEqual(body["fare_in"], 800000)
+            self.assertEqual(body["new_car"], 800000)
+            self.assertEqual(idle.passenger, "")
+            self.assertEqual(idle.fare_name, "")
+            self.assertNotEqual(idle.status, "with_passenger")
+            self.assertNotEqual(idle.job, "carrying")
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_suite_does_not_use_the_live_database_or_the_network(self) -> None:
         live = ROOT / "hackathon.db"
         before = live.stat().st_mtime if live.exists() else None

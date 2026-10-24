@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from .database import SessionLocal, normalise_username
 from .models import EmpireCar, EmpireGame, EmpirePerson
@@ -521,6 +521,19 @@ def airport_ends(username: str) -> tuple[tuple[float, float], tuple[float, float
     return place_point(AIRPORT_NAME), place_point(drops[index % len(drops)])
 
 
+def hour_ends(username: str, now: float) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Pickup and drop for this hour. The same ends the passenger trip already uses."""
+    if is_morning(now):
+        return morning_ends(username)
+    if is_day(now):
+        return day_ends(username)
+    if is_evening(now):
+        return evening_ends(username)
+    if is_night(now):
+        return night_ends(username)
+    return journey_ends(username)
+
+
 def hour_pickup(username: str, now: float) -> tuple[float, float]:
     """The place where a person waits. Not a ring around the depot."""
     if is_morning(now):
@@ -681,7 +694,42 @@ def _store_job(car: EmpireCar) -> None:
     car.job = current_job(car)
 
 
+def _allocated_person(car: EmpireCar) -> EmpirePerson | None:
+    session = object_session(car)
+    if session is None:
+        return None
+    return session.scalar(
+        select(EmpirePerson).where(
+            EmpirePerson.username == car.username,
+            EmpirePerson.sign == car.sign,
+        )
+    )
+
+
+def _start_arrived_trip(car: EmpireCar, game: EmpireGame, now: float) -> None:
+    """The allocated taxi has arrived. Run the existing passenger trip.
+
+    800000 is not a fare. fare_in is unchanged.
+    """
+    pickup, drop = hour_ends(car.username, now)
+    person = _allocated_person(car)
+    if person is not None and person.name:
+        name = person.name
+    else:
+        name = _next_name(game)
+    route = _loads(car.route_json, [])
+    start = (float(route[-1][0]), float(route[-1][1])) if route else pickup
+    car.passenger = name
+    car.fare_name = ""
+    car.fare_lat, car.fare_lng = pickup
+    car.drop_lat, car.drop_lng = drop
+    _begin(car, game, start, drop, now, "with_passenger")
+
+
 def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
+    if car.status == "to_better_spot" and _allocated_person(car) is not None:
+        _start_arrived_trip(car, game, now)
+        return
     if car.status == "to_better_spot" or (car.status == "to_passenger" and not car.passenger and not car.fare_name):
         _finish_empty_move(car, now)
         return
