@@ -605,6 +605,34 @@ class EmpireFleetTests(unittest.TestCase):
         for index in range(1, 11):
             self.assertEqual(self._car(arrived, f"T{index}")["status"], "with_passenger")
 
+    def test_ten_car_fare_is_present_only_while_going_to_the_passenger(self) -> None:
+        statuses = ("at_depot", "to_passenger", "with_passenger", "returning")
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            self.assertEqual(len(cars), 10)
+            for car in cars:
+                car.status = statuses[(int(car.sign[1:]) - 1) % 4]
+                car.fare_name = "Mina"
+                car.passenger = "Mina"
+                car.fare_lat = 55.04
+                car.fare_lng = -1.51
+            session.commit()
+            body = empire.snapshot("ada", NOW, session)
+        self.assertEqual(len(body["cars"]), 10)
+        fare_signs = {fare["sign"] for fare in body["fares"]}
+        expected = set()
+        for car in body["cars"]:
+            if car["status"] == "to_passenger":
+                expected.add(car["sign"])
+                self.assertIn(car["sign"], fare_signs)
+            else:
+                self.assertNotIn(car["sign"], fare_signs)
+        self.assertEqual(fare_signs, expected)
+        self.assertEqual(fare_signs, {"T2", "T6", "T10"})
+        for fare in body["fares"]:
+            self.assertEqual(fare["name"], "Mina")
+
     def test_depot_car_still_has_a_position(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
