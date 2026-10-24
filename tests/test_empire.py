@@ -367,6 +367,26 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertIn("T11", signs)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_rejected_bearer_token_on_the_purchase_adds_no_car(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "badtoken", "password": "password1"}).status_code, 201)
+            rejected = client.post(
+                "/v1/empire/buy",
+                headers={"Authorization": "Bearer not-a-real-token"},
+                json={"pence": 800000},
+            )
+            token = client.post("/login", json={"username": "badtoken", "password": "password1"}).json()["access_token"]
+            body = client.get("/v1/empire", headers={"Authorization": f"Bearer {token}"}).json()
+        signs = [car["sign"] for car in body["cars"]]
+        self.assertEqual(rejected.status_code, 401)
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 11)])
+        self.assertNotIn("T11", signs)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_company_figure_minus_1120_stays_off_the_ten_car_feed(self) -> None:
         from fastapi.testclient import TestClient
 
