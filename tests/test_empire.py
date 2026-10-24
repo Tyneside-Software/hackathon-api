@@ -491,13 +491,37 @@ class EmpireFleetTests(unittest.TestCase):
             if sign not in {"T1", "T2", "T3"}:
                 self.assertEqual(status, "at_depot", sign)
 
+    def test_feed_includes_the_money_lines(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            body = empire.snapshot("ada", NOW, session)
+        for key in ("fare_in", "driver_share", "fuel", "standing"):
+            self.assertIs(type(body[key]), int)
+        self.assertEqual(body["fare_in"], 0)
+        self.assertEqual(body["driver_share"], 0)
+        self.assertEqual(body["fuel"], 0)
+        self.assertEqual(body["standing"], 1500 * 10)
+
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
             body = empire.snapshot("ada", NOW + 3, session)
         self.assertEqual(
             set(body),
-            {"ok", "username", "server_now", "check_s", "trail_s", "osrm_unavailable", "cars", "fares"},
+            {
+                "ok",
+                "username",
+                "server_now",
+                "check_s",
+                "trail_s",
+                "osrm_unavailable",
+                "cars",
+                "fares",
+                "fare_in",
+                "driver_share",
+                "fuel",
+                "standing",
+            },
         )
         self.assertTrue(body["ok"])
         self.assertEqual(body["check_s"], 10)
