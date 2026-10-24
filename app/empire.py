@@ -59,7 +59,8 @@ CARS = tuple(
     )
 )
 OPENING_SIGNS = frozenset(sign for sign, _colour, _offset in CARS)
-STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning")
+STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning", "to_better_spot")
+JOBS = ("waiting", "travelling to a better spot", "collecting", "carrying", "returning")
 BERWICK = (55.7692, -2.0084)
 # Published positions. Reading this table does not call the network.
 PLACES = (
@@ -305,6 +306,7 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
                         osrm=False,
                         trail_json="[]",
                         fare_name="",
+                        job="waiting",
                         hold_until=now + offset,
                         next_check=now + CHECK_S,
                         depart_offset=offset,
@@ -319,6 +321,7 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
                         sign=sign,
                         colour=colour,
                         status="at_depot",
+                        job="waiting",
                         lat=DEPOT[0],
                         lng=DEPOT[1],
                         hold_until=now + offset,
@@ -341,7 +344,7 @@ def _next_name(game: EmpireGame) -> str:
 
 def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tuple[float, float], now: float, status: str) -> None:
     route, duration, osrm = build_route(start, end)
-    if status == "to_passenger":
+    if status in ("to_passenger", "to_better_spot"):
         if not route:
             route = [[DEPOT[0], DEPOT[1]]]
         route[0] = [DEPOT[0], DEPOT[1]]
@@ -661,8 +664,25 @@ def _finish_empty_move(car: EmpireCar, now: float) -> None:
         car.hold_until = now + DEPOT_PAUSE_S
 
 
+def current_job(car: EmpireCar) -> str:
+    """One job. The four movement statuses stay the words they already are."""
+    if car.status == "to_better_spot":
+        return "travelling to a better spot"
+    if car.status == "to_passenger":
+        return "collecting"
+    if car.status == "with_passenger":
+        return "carrying"
+    if car.status == "returning":
+        return "returning"
+    return "waiting"
+
+
+def _store_job(car: EmpireCar) -> None:
+    car.job = current_job(car)
+
+
 def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
-    if car.status == "to_passenger" and not car.passenger and not car.fare_name:
+    if car.status == "to_better_spot" or (car.status == "to_passenger" and not car.passenger and not car.fare_name):
         _finish_empty_move(car, now)
         return
     if car.status == "to_passenger":
@@ -723,6 +743,7 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
                 car.lat, car.lng = point_at(route, fraction)
             break
         _finish_leg(car, game, car.leg_started + car.duration_s)
+    _store_job(car)
     _check_in(car, now)
 
 
@@ -748,7 +769,8 @@ def _travel_to_a_better_spot(game: EmpireGame, session: Session, now: float) -> 
         car.fare_lng = 0.0
         car.drop_lat = 0.0
         car.drop_lng = 0.0
-        _begin(car, game, DEPOT, spot, now, "to_passenger")
+        _begin(car, game, DEPOT, spot, now, "to_better_spot")
+        _store_job(car)
 
 
 def tick_all(now: float | None = None, session: Session | None = None) -> None:
@@ -829,6 +851,7 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
                 sign="T11",
                 colour="#2dd4bf",
                 status="at_depot",
+                job="waiting",
                 passenger="",
                 lat=DEPOT[0],
                 lng=DEPOT[1],
@@ -899,6 +922,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
         for car in cars:
             if car.status not in STATUSES:
                 car.status = "at_depot"
+            _store_job(car)
             route = _loads(car.route_json, [])
             trail = _loads(car.trail_json, [])
             payload_cars.append(
@@ -906,6 +930,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                     "sign": car.sign,
                     "colour": car.colour,
                     "status": car.status,
+                    "job": car.job,
                     "passenger": car.passenger,
                     "lat": car.lat,
                     "lng": car.lng,

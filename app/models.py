@@ -639,6 +639,7 @@ class EmpireCar(Base):
     sign: Mapped[str] = mapped_column(String(8))
     colour: Mapped[str] = mapped_column(String(16), default="")
     status: Mapped[str] = mapped_column(String(32), default="at_depot")
+    job: Mapped[str] = mapped_column(String(64), default="")
     passenger: Mapped[str] = mapped_column(String(64), default="")
     lat: Mapped[float] = mapped_column(Float, default=0)
     lng: Mapped[float] = mapped_column(Float, default=0)
