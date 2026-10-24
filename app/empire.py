@@ -899,61 +899,69 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
                 sign="",
                 drop_lat=drop[0],
                 drop_lng=drop[1],
+                arrived=now,
             )
         )
         game.name_index = index + 1
         session.flush()
 
 
+def _claim_closest(people: list[EmpirePerson], cars: list[EmpireCar], taken: set[str]) -> None:
+    """One free car takes the closest person who still has no taxi.
+
+    Equal distances keep the older person and the lower sign. A car on a leg is not here.
+    """
+    pending = [person for person in people if not person.sign]
+    free = [
+        car
+        for car in cars
+        if car.status == "at_depot" and car.sign not in taken and car_may_depart(car)
+    ]
+    while pending and free:
+        best_rank = None
+        best_person = None
+        best_car = None
+        for person in pending:
+            pickup = (float(person.lat), float(person.lng))
+            for car in free:
+                rank = (
+                    haversine_km(car_position(car), pickup),
+                    int(person.id or 0),
+                    int(car.sign[1:]),
+                    car.sign,
+                )
+                if best_rank is None or rank < best_rank:
+                    best_rank = rank
+                    best_person = person
+                    best_car = car
+        best_person.sign = best_car.sign
+        taken.add(best_car.sign)
+        pending.remove(best_person)
+        free.remove(best_car)
+
+
 def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
-    """Each waiting person is claimed by one depot taxi. A car on a leg is left alone.
+    """Each waiting person is claimed by the closest free taxi. A car on a leg is left alone.
 
     People left over do not add a car. Two people do not claim the same taxi.
     The app session does not autoflush, so this reads the cars already in memory.
     """
     people = _people(session, game.username)
     taken = {person.sign for person in people if person.sign}
-    for person in people:
-        if person.sign:
-            continue
-        for car in _cars(session, game.username):
-            if car.status != "at_depot" or car.sign in taken or not car_may_depart(car):
-                continue
-            person.sign = car.sign
-            taken.add(car.sign)
-            break
+    _claim_closest(people, _cars(session, game.username), taken)
 
 
 def _allocate_firm_leftovers(game: EmpireGame, session: Session) -> None:
-    """Other firms take people the player's cars are not covering.
+    """Other firms take people the player's cars are not covering, by the closest car.
 
-    A nearer depot is more likely. The player's depot is not in this contest.
+    The player's cars have already claimed. This does not add a car.
     """
     people = _people(session, game.username)
     taken = {person.sign for person in people if person.sign}
-    fleets: list[tuple[tuple[float, float], list[EmpireCar]]] = []
+    firm_cars: list[EmpireCar] = []
     for firm in FIRM_NAMES:
-        free = [
-            car
-            for car in _fleet_cars(session, firm_key(game.username, firm))
-            if car.status == "at_depot" and car.sign not in taken and car_may_depart(car)
-        ]
-        if not free:
-            continue
-        fleets.append((car_depot(free[0]), free))
-    for person in people:
-        if person.sign or not fleets:
-            continue
-        pickup = (float(person.lat), float(person.lng))
-        depots = tuple(depot for depot, _free in fleets)
-        winner = depot_takes_pickup(pickup, depots, game.username, f"leftover-{person.id}")
-        index = next(i for i, (depot, _free) in enumerate(fleets) if depot == winner)
-        _depot, free = fleets[index]
-        car = free.pop(0)
-        person.sign = car.sign
-        taken.add(car.sign)
-        if not free:
-            fleets.pop(index)
+        firm_cars.extend(_fleet_cars(session, firm_key(game.username, firm)))
+    _claim_closest(people, firm_cars, taken)
     session.flush()
 
 
@@ -1097,9 +1105,25 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         _collected_person_leaves(car)
         return
     if car.status == "with_passenger":
-        start = (car.drop_lat, car.drop_lng)
+        route = _loads(car.route_json, [])
+        if route:
+            start = (float(route[-1][0]), float(route[-1][1]))
+        else:
+            start = (float(car.drop_lat), float(car.drop_lng))
         car.passenger = ""
-        _begin(car, game, start, car_depot(car), now, "returning")
+        car.fare_name = ""
+        car.fare_lat = 0.0
+        car.fare_lng = 0.0
+        car.drop_lat = 0.0
+        car.drop_lng = 0.0
+        car.status = "at_depot"
+        car.lat, car.lng = start
+        car.route_json = json.dumps([[start[0], start[1]], [start[0], start[1]]])
+        car.duration_s = 0
+        car.leg_started = now
+        car.hold_until = now
+        car.osrm = True
+        car.job = "waiting"
         return
     if car.status == "returning":
         route = _loads(car.route_json, [])
@@ -1381,7 +1405,23 @@ def money_lines(car_count: int, fare_in: int = 0, miles: float = 0.0) -> dict[st
     }
 
 
-def _public_car(car: EmpireCar) -> dict:
+def leg_seconds_left(car: EmpireCar, now: float) -> int:
+    """Whole seconds left on this leg. A car at the depot has none."""
+    if car.status == "at_depot" or float(car.duration_s) <= 0:
+        return 0
+    elapsed = max(0.0, float(now) - float(car.leg_started))
+    return max(0, int(float(car.duration_s) - elapsed))
+
+
+def waiting_seconds(person: EmpirePerson, now: float) -> int:
+    """Whole seconds since this person started waiting. An unknown arrival is zero."""
+    arrived = float(person.arrived or 0)
+    if arrived <= 0:
+        return 0
+    return max(0, int(float(now) - arrived))
+
+
+def _public_car(car: EmpireCar, now: float = 0) -> dict:
     if car.status not in STATUSES:
         car.status = "at_depot"
     _store_job(car)
@@ -1404,6 +1444,7 @@ def _public_car(car: EmpireCar) -> dict:
         "osrm": bool(car.osrm),
         "trail": _loads(car.trail_json, []),
         "destination": destination,
+        "seconds_left": leg_seconds_left(car, now),
     }
 
 
@@ -1422,7 +1463,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
         payload_cars = []
         fares = []
         for car in cars:
-            payload_cars.append(_public_car(car))
+            payload_cars.append(_public_car(car, now))
             if car.status == "to_passenger" and car.fare_name:
                 fares.append(
                     {
@@ -1432,17 +1473,25 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                         "sign": car.sign,
                     }
                 )
-        people = [
-            {
-                "name": person.name,
-                "lat": person.lat,
-                "lng": person.lng,
-                "sign": person.sign,
-            }
-            for person in session.scalars(
-                select(EmpirePerson).where(EmpirePerson.username == username).order_by(EmpirePerson.id)
-            ).all()
-        ]
+        by_sign = {car.sign: car for car in cars}
+        for firm in FIRM_NAMES:
+            for car in _fleet_cars(session, firm_key(username, firm)):
+                by_sign[car.sign] = car
+        people = []
+        for person in session.scalars(
+            select(EmpirePerson).where(EmpirePerson.username == username).order_by(EmpirePerson.id)
+        ).all():
+            locked = by_sign.get(person.sign) if person.sign else None
+            people.append(
+                {
+                    "name": person.name,
+                    "lat": person.lat,
+                    "lng": person.lng,
+                    "sign": person.sign,
+                    "waiting_s": waiting_seconds(person, now),
+                    "seconds_left": leg_seconds_left(locked, now) if locked is not None else 0,
+                }
+            )
         miles = sum(driven_miles(car, now) for car in cars)
         lines = money_lines(len(cars), miles=miles)
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
@@ -1456,7 +1505,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                 {
                     "firm": firm,
                     "depot": [home[0], home[1]],
-                    "cars": [_public_car(car) for car in rows],
+                    "cars": [_public_car(car, now) for car in rows],
                 }
             )
         return {
