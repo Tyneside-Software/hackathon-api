@@ -502,6 +502,17 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["fuel"], 0)
         self.assertEqual(body["standing"], 1500 * 10)
 
+    def test_driver_share_is_half_the_fare(self) -> None:
+        self.assertEqual(empire.driver_share_pence(1040), 520)
+        lines = empire.money_lines(10, fare_in=1040)
+        self.assertEqual(lines["fare_in"], 1040)
+        self.assertEqual(lines["driver_share"], 520)
+        self.assertIs(type(lines["driver_share"]), int)
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            body = empire.snapshot("ada", NOW, session)
+        self.assertEqual(body["driver_share"], body["fare_in"] // 2)
+
     def test_feed_names_the_clock_and_the_trail(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
