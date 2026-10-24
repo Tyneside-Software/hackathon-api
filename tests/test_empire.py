@@ -92,6 +92,52 @@ class EmpireRegisterTests(unittest.TestCase):
             self.assertIsNotNone(session.get(EmpireGame, "fleet8"))
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_money_lines_are_for_one_account(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/register", json={"username": "moneya", "password": "password1"}).status_code, 201)
+            self.assertEqual(client.post("/register", json={"username": "moneyb", "password": "password1"}).status_code, 201)
+            with SessionLocal() as session:
+                session.add(
+                    EmpireCar(
+                        username="moneyb",
+                        sign="T11",
+                        colour="#ffffff",
+                        status="at_depot",
+                        passenger="",
+                        lat=55.0367,
+                        lng=-1.5075,
+                        route_json="[]",
+                        duration_s=0,
+                        leg_started=0,
+                        osrm=False,
+                        trail_json="[]",
+                        fare_name="",
+                        hold_until=10**12,
+                        next_check=10**12,
+                        depart_offset=-1,
+                    )
+                )
+                session.commit()
+            token_a = client.post("/login", json={"username": "moneya", "password": "password1"}).json()["access_token"]
+            token_b = client.post("/login", json={"username": "moneyb", "password": "password1"}).json()["access_token"]
+            ada = client.get("/v1/empire", headers={"Authorization": f"Bearer {token_a}"}).json()
+            bee = client.get("/v1/empire", headers={"Authorization": f"Bearer {token_b}"}).json()
+        self.assertEqual(ada["username"], "moneya")
+        self.assertEqual(bee["username"], "moneyb")
+        self.assertEqual(ada["standing"], 1500 * 10)
+        self.assertEqual(bee["standing"], 1500 * 11)
+        self.assertEqual(ada["fare_in"], 0)
+        self.assertEqual(ada["driver_share"], 0)
+        self.assertEqual(ada["fuel"], 0)
+        self.assertNotIn("T11", [car["sign"] for car in ada["cars"]])
+        self.assertIn("T11", [car["sign"] for car in bee["cars"]])
+        self.assertNotIn(16500, [ada["fare_in"], ada["driver_share"], ada["fuel"], ada["standing"], ada["new_car"]])
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
 
 class EmpireFleetTests(unittest.TestCase):
     def setUp(self) -> None:
