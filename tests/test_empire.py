@@ -733,6 +733,23 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["standing"], 1500 * len(body["cars"]))
         self.assertIs(type(body["standing"]), int)
 
+    def test_standing_does_not_rise_when_the_ten_drive(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            before = empire.snapshot("ada", NOW, session)
+            empire.tick_all(NOW + 64, session)
+            cars = list(session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all())
+            miles = sum(empire.driven_miles(car, NOW + 64) for car in cars)
+            body = empire.snapshot("ada", NOW + 64, session)
+        self.assertEqual(len(body["cars"]), 10)
+        self.assertEqual(before["fuel"], 0)
+        self.assertEqual(before["standing"], 1500 * 10)
+        self.assertGreater(miles, 0)
+        self.assertEqual(body["fuel"], empire.fuel_pence(miles))
+        self.assertGreater(body["fuel"], 0)
+        self.assertEqual(body["standing"], 1500 * 10)
+        self.assertNotEqual(body["standing"], before["standing"] + body["fuel"])
+
     def test_ten_cars_standing_sum_to_minus_15000(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
