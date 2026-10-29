@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..dependencies import get_current_active_user
-from ..empire import buy_car, cancel_job, set_loiter, snapshot
+from ..empire import NEW_CAR_PENCE, buy_car, cancel_job, set_loiter, snapshot
 from ..models import User
 
 router = APIRouter()
@@ -38,10 +38,14 @@ def empire_buy(
     body: EmpireBuy,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> dict:
-    """Spend 800000 pence to add T11. A smaller payment adds nothing."""
+    """Spend 800000 pence to add T11 when the account can afford it. A smaller payment adds nothing."""
     sign = buy_car(current_user.username, body.pence)
     if sign is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="800000 pence buys the next car")
+        if int(body.pence) < NEW_CAR_PENCE:
+            detail = "800000 pence buys the next car"
+        else:
+            detail = "Not enough money for that taxi"
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     return {"sign": sign}
 
 
