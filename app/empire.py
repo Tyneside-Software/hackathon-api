@@ -310,6 +310,7 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
                 fare_in=0,
                 miles_driven=0,
                 firm_bookings="[]",
+                trip_bookings="[]",
             )
             session.add(game)
             for sign, colour, offset in CARS:
@@ -1238,6 +1239,57 @@ def _collected_person_leaves(car: EmpireCar) -> None:
     session.flush()
 
 
+def _trip_rows(game: EmpireGame) -> list[dict]:
+    raw = "[]" if game is None else (game.trip_bookings or "[]")
+    rows = _loads(raw, [])
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _remember_trip_booking(
+    game: EmpireGame,
+    car: EmpireCar,
+    pickup: tuple[float, float],
+    drop: tuple[float, float],
+    pence: int,
+    completed: float,
+) -> None:
+    """Append one finished trip for this account. Keep the last 12. Do not touch fare_in."""
+    if (car.firm or "").strip():
+        return
+    pence = int(pence)
+    if pence == NEW_CAR_PENCE:
+        return
+    rows = _trip_rows(game)
+    rows.append(
+        {
+            "sign": car.sign,
+            "pickup": place_name(pickup),
+            "drop": place_name(drop),
+            "pence": pence,
+            "completed": int(completed),
+        }
+    )
+    game.trip_bookings = json.dumps(rows[-FIRM_BOOKINGS_KEPT:])
+
+
+def _public_trip_bookings(game: EmpireGame) -> list[dict]:
+    out = []
+    for row in _trip_rows(game):
+        pence = int(row.get("pence") or 0)
+        if pence == NEW_CAR_PENCE:
+            continue
+        out.append(
+            {
+                "sign": str(row.get("sign") or ""),
+                "pickup": str(row.get("pickup") or ""),
+                "drop": str(row.get("drop") or ""),
+                "pence": pence,
+                "completed": int(row.get("completed") or 0),
+            }
+        )
+    return out[-FIRM_BOOKINGS_KEPT:]
+
+
 def _booking_rows(game: EmpireGame) -> list[dict]:
     raw = "[]" if game is None else (game.firm_bookings or "[]")
     rows = _loads(raw, [])
@@ -1326,6 +1378,7 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
             drop = (float(car.drop_lat), float(car.drop_lng))
         if not (car.firm or ""):
             game.fare_in = int(game.fare_in or 0) + tariff
+            _remember_trip_booking(game, car, pickup, drop, tariff, now)
         else:
             _remember_firm_booking(game, car, pickup, drop, tariff, now)
         _remember_miles(car)
@@ -2162,6 +2215,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "fares": fares,
             "people": people,
             "firms": firms,
+            "bookings": [] if game is None else _public_trip_bookings(game),
             "loiter": public_loiter(game),
             "fare_in": lines["fare_in"],
             "cash_pence": cash_pence,
