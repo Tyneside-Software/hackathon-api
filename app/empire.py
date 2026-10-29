@@ -2409,6 +2409,7 @@ def bootstrap_shared_houses() -> None:
     """Replace users and empire rows once, when EMPIRE_RESET=1 and the flag is unset.
 
     The board, bus cache, devices, and location pings stay. A second boot sees the flag and leaves the rows.
+    Leave EMPIRE_RESET unset after that flag is written, so a later boot cannot wipe the houses.
     """
     import os
 
