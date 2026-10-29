@@ -1663,7 +1663,7 @@ def pay_new_car(car: EmpireCar, pence: int) -> bool:
 
 
 def buy_car(username: str, pence: int, now: float | None = None, session: Session | None = None) -> str | None:
-    """Spend 800000 pence to add T11. A smaller payment adds nothing."""
+    """Spend 800000 pence to add T11 when this account's money covers it. A smaller payment adds nothing."""
     if not new_car_may_leave(pence):
         return None
     username = normalise_username(username)
@@ -1674,14 +1674,18 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
         now = time.time()
     try:
         game = ensure_game(username, now, session)
-        existing = next((car for car in _cars(session, username) if car.sign == "T11"), None)
+        cars = _cars(session, username)
+        existing = next((car for car in cars if car.sign == "T11"), None)
+        if existing is not None and existing.depart_offset >= 0:
+            return "T11"
+        if account_balance(game, cars, now) < NEW_CAR_PENCE:
+            return None
         if existing is not None:
-            if existing.depart_offset < 0:
-                existing.depart_offset = 0
-                existing.leg_started = now
-                existing.hold_until = now + DEPOT_PAUSE_S
-                game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
-                session.commit()
+            existing.depart_offset = 0
+            existing.leg_started = now
+            existing.hold_until = now + DEPOT_PAUSE_S
+            game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
+            session.commit()
             return "T11"
         game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
         session.add(
@@ -1987,6 +1991,50 @@ def money_lines(car_count: int, fare_in: int = 0, miles: float = 0.0) -> dict[st
     }
 
 
+def account_balance(game: EmpireGame | None, cars: list[EmpireCar], now: float) -> int:
+    """Pence this account can spend. Fares come in. The driver's share, fuel, standing, and taxi purchases come out."""
+    fare = 0 if game is None else int(game.fare_in or 0)
+    done = 0.0 if game is None else float(game.miles_driven or 0)
+    miles = done + sum(driven_miles(car, now) for car in cars)
+    lines = money_lines(len(cars), fare_in=fare, miles=miles)
+    cash = 0 if game is None else int(game.cash_pence or 0)
+    return cash + lines["fare_in"] - lines["driver_share"] - lines["fuel"] - lines["standing"]
+
+
+def car_is_for_sale(car: EmpireCar) -> bool:
+    """A bought car that is not yet paid for can still be bought. The opening ten cannot."""
+    return car.sign not in OPENING_SIGNS and float(car.depart_offset) < 0
+
+
+def for_sale_rows(cars: list[EmpireCar]) -> list[dict]:
+    """Taxis the account does not own yet. T11 waits at the depot until it is paid for."""
+    owned = {car.sign for car in cars}
+    rows: list[dict] = []
+    if "T11" not in owned:
+        rows.append(
+            {
+                "sign": "T11",
+                "colour": "#2dd4bf",
+                "lat": DEPOT[0],
+                "lng": DEPOT[1],
+                "pence": NEW_CAR_PENCE,
+            }
+        )
+    for car in cars:
+        if not car_is_for_sale(car):
+            continue
+        rows.append(
+            {
+                "sign": car.sign,
+                "colour": car.colour,
+                "lat": float(car.lat),
+                "lng": float(car.lng),
+                "pence": NEW_CAR_PENCE,
+            }
+        )
+    return rows
+
+
 def leg_seconds_left(car: EmpireCar, now: float) -> int:
     """Whole seconds left on this leg. A car at the depot has none."""
     if car.status == "at_depot" or float(car.duration_s) <= 0:
@@ -2032,6 +2080,7 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
         "drop": trip["drop"],
         "trip_pence": trip["trip_pence"],
         "journey": (car.journey or "") if car.status == "with_passenger" else "",
+        "for_sale": car_is_for_sale(car),
     }
 
 
@@ -2085,6 +2134,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
         fare_in = 0 if game is None else int(game.fare_in or 0)
         lines = money_lines(len(cars), fare_in=fare_in, miles=miles)
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
+        balance = account_balance(game, cars, now)
         firms = []
         for firm in FIRM_NAMES:
             rows = _fleet_cars(session, firm_key(username, firm))
@@ -2115,10 +2165,12 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "loiter": public_loiter(game),
             "fare_in": lines["fare_in"],
             "cash_pence": cash_pence,
+            "balance": balance,
             "driver_share": lines["driver_share"],
             "fuel": lines["fuel"],
             "standing": lines["standing"],
             "new_car": NEW_CAR_PENCE,
+            "for_sale": for_sale_rows(cars),
         }
     finally:
         if own_session:

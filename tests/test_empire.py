@@ -9,6 +9,7 @@ import os
 import random
 import sys
 import tempfile
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -37,6 +38,20 @@ def _ring(username: str) -> tuple[tuple[float, float], tuple[float, float]]:
         empire.destination(empire.DEPOT, bearing, 1.2),
         empire.destination(empire.DEPOT, bearing, 3.0),
     )
+
+
+def stake_one_car(username: str, session, now: float | None = None) -> int:
+    """Top the account up so one taxi purchase clears the balance check. Returns the cash afterwards."""
+    if now is None:
+        now = time.time()
+    body = empire.snapshot(username, now, session)
+    target = empire.NEW_CAR_PENCE + 100_000
+    short = target - int(body["balance"])
+    game = session.get(EmpireGame, username)
+    if short > 0:
+        game.cash_pence = int(game.cash_pence or 0) + short
+        session.commit()
+    return int(game.cash_pence or 0)
 
 
 def _depot_bearing(point: tuple[float, float]) -> float:
@@ -640,6 +655,7 @@ class EmpireRegisterTests(unittest.TestCase):
             headers = {"Authorization": f"Bearer {token}"}
             before = client.get("/v1/empire", headers=headers).json()
             with SessionLocal() as session:
+                stake_one_car("bought1", session)
                 added = empire.buy_car("bought1", 800000, session=session)
             after = client.get("/v1/empire", headers=headers).json()
         self.assertEqual([car["sign"] for car in before["cars"]], [f"T{index}" for index in range(1, 11)])
@@ -661,6 +677,8 @@ class EmpireRegisterTests(unittest.TestCase):
             before = client.get("/v1/empire", headers=headers)
             short = client.post("/v1/empire/buy", headers=headers, json={"pence": 799999})
             after_short = client.get("/v1/empire", headers=headers)
+            with SessionLocal() as session:
+                stake_one_car("routebuy", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             again = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             after = client.get("/v1/empire", headers=headers)
@@ -704,6 +722,10 @@ class EmpireRegisterTests(unittest.TestCase):
                 session.commit()
             short = client.post("/v1/empire/buy", headers=headers, json={"pence": 799999})
             after_short = client.get("/v1/empire", headers=headers).json()
+            broke = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
+            after_broke = client.get("/v1/empire", headers=headers).json()
+            with SessionLocal() as session:
+                paid_from = stake_one_car("cashpost", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             again = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             after = client.get("/v1/empire", headers=headers).json()
@@ -715,11 +737,15 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(after_short["cash_pence"], 500000)
         self.assertEqual(after_short["fare_in"], 1040)
         self.assertNotIn("T11", [car["sign"] for car in after_short["cars"]])
+        self.assertEqual(broke.status_code, 400)
+        self.assertEqual(broke.json()["detail"], "Not enough money for that taxi")
+        self.assertEqual(after_broke["cash_pence"], 500000)
+        self.assertNotIn("T11", [car["sign"] for car in after_broke["cars"]])
         self.assertEqual(bought.status_code, 200)
         self.assertEqual(bought.json()["sign"], "T11")
         self.assertEqual(again.status_code, 200)
         self.assertEqual(again.json()["sign"], "T11")
-        self.assertEqual(after["cash_pence"], 500000 - 800000)
+        self.assertEqual(after["cash_pence"], paid_from - 800000)
         self.assertEqual(after["fare_in"], 1040)
         self.assertNotEqual(after["fare_in"], 1040 - 800000)
         self.assertNotEqual(after["cash_pence"], 800000)
@@ -888,6 +914,8 @@ class EmpireRegisterTests(unittest.TestCase):
             token = client.post("/login", json={"username": "notoken1", "password": "password1"}).json()["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
             before = client.get("/v1/empire", headers=headers)
+            with SessionLocal() as session:
+                stake_one_car("notoken1", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             after = client.get("/v1/empire", headers=headers)
         self.assertEqual(missing.status_code, 401)
@@ -908,6 +936,8 @@ class EmpireRegisterTests(unittest.TestCase):
             self.assertEqual(client.post("/register", json={"username": "bodyacct", "password": "password1"}).status_code, 201)
             token = client.post("/login", json={"username": "tokacct", "password": "password1"}).json()["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
+            with SessionLocal() as session:
+                stake_one_car("tokacct", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000, "username": "bodyacct"})
             owner = client.get("/v1/empire", headers=headers)
             other_token = client.post("/login", json={"username": "bodyacct", "password": "password1"}).json()["access_token"]
@@ -928,6 +958,8 @@ class EmpireRegisterTests(unittest.TestCase):
             self.assertEqual(client.post("/register", json={"username": "listafter", "password": "password1"}).status_code, 201)
             token = client.post("/login", json={"username": "listafter", "password": "password1"}).json()["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
+            with SessionLocal() as session:
+                stake_one_car("listafter", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             body = client.get("/v1/empire", headers=headers)
         signs = [car["sign"] for car in body.json()["cars"]]
@@ -950,6 +982,8 @@ class EmpireRegisterTests(unittest.TestCase):
             self.assertEqual(client.post("/register", json={"username": "spendonce", "password": "password1"}).status_code, 201)
             token = client.post("/login", json={"username": "spendonce", "password": "password1"}).json()["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
+            with SessionLocal() as session:
+                stake_one_car("spendonce", session)
             first = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             second = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             body = client.get("/v1/empire", headers=headers).json()
@@ -979,6 +1013,8 @@ class EmpireRegisterTests(unittest.TestCase):
             headers = {"Authorization": f"Bearer {token}"}
             short = client.post("/v1/empire/buy", headers=headers, json={"pence": 799999})
             after_short = client.get("/v1/empire", headers=headers).json()
+            with SessionLocal() as session:
+                stake_one_car("underpay", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             after = client.get("/v1/empire", headers=headers).json()
         short_signs = [car["sign"] for car in after_short["cars"]]
@@ -1005,6 +1041,8 @@ class EmpireRegisterTests(unittest.TestCase):
             headers = {"Authorization": f"Bearer {token}"}
             missing = client.post("/v1/empire/buy", headers=headers, json={})
             after_missing = client.get("/v1/empire", headers=headers).json()
+            with SessionLocal() as session:
+                stake_one_car("nopence", session)
             bought = client.post("/v1/empire/buy", headers=headers, json={"pence": 800000})
             after = client.get("/v1/empire", headers=headers).json()
         missing_signs = [car["sign"] for car in after_missing["cars"]]
@@ -1127,6 +1165,7 @@ class EmpireFleetTests(unittest.TestCase):
     def test_paid_800000_adds_one_car_and_keeps_the_ten(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
+            stake_one_car("ada", session, NOW)
             added = empire.buy_car("ada", 800000, NOW, session)
             body = empire.snapshot("ada", NOW, session)
             stored = [car.sign for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()]
@@ -1159,6 +1198,7 @@ class EmpireFleetTests(unittest.TestCase):
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
             before = empire.snapshot("ada", NOW, session)
+            stake_one_car("ada", session, NOW)
             added = empire.buy_car("ada", 800000, NOW, session)
             after = empire.snapshot("ada", NOW, session)
         self.assertEqual(added, "T11")
@@ -1182,6 +1222,7 @@ class EmpireFleetTests(unittest.TestCase):
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
             before_devices = session.scalar(select(func.count()).select_from(Device))
+            stake_one_car("ada", session, NOW)
             added = empire.buy_car("ada", 800000, NOW, session)
             devices = session.scalar(select(func.count()).select_from(Device))
             links = session.scalar(select(func.count()).select_from(DeviceLink))
@@ -1201,6 +1242,7 @@ class EmpireFleetTests(unittest.TestCase):
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
             empire.ensure_game("bee", NOW, session)
+            stake_one_car("ada", session, NOW)
             added = empire.buy_car("ada", 800000, NOW, session)
             ada_stored = [car.sign for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "ada")).all()]
             bee_stored = [car.sign for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "bee")).all()]
@@ -1219,6 +1261,7 @@ class EmpireFleetTests(unittest.TestCase):
     def test_bought_car_starts_at_the_shiremoor_depot(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
+            stake_one_car("ada", session, NOW)
             added = empire.buy_car("ada", 800000, NOW, session)
             body = empire.snapshot("ada", NOW, session)
             stored = session.scalar(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11"))
@@ -1255,6 +1298,7 @@ class EmpireFleetTests(unittest.TestCase):
     def test_bought_car_first_fare_stays_inside_the_circle(self) -> None:
         with self.Session() as session:
             empire.ensure_game("ada", NOW, session)
+            stake_one_car("ada", session, NOW)
             added = empire.buy_car("ada", 800000, NOW, session)
             empire.tick_all(NOW + 1, session)
             car = session.scalar(select(EmpireCar).where(EmpireCar.username == "ada", EmpireCar.sign == "T11"))
@@ -2045,6 +2089,60 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["fuel"], 0)
         self.assertEqual(body["standing"], 1500 * 10)
 
+    def test_balance_tracks_fares_costs_and_refuses_a_taxi_the_account_cannot_afford(self) -> None:
+        with self.Session() as session:
+            game = empire.ensure_game("purse", NOW, session)
+            empire.ensure_game("purseother", NOW, session)
+            before = empire.snapshot("purse", NOW, session)
+            self.assertEqual(
+                before["balance"],
+                before["cash_pence"] + before["fare_in"] - before["driver_share"] - before["fuel"] - before["standing"],
+            )
+            self.assertEqual(before["balance"], -1500 * 10)
+            self.assertEqual(before["for_sale"][0]["sign"], "T11")
+            self.assertEqual(before["for_sale"][0]["pence"], 800000)
+            self.assertEqual([row["sign"] for row in before["for_sale"]], ["T11"])
+            self.assertIsNone(empire.buy_car("purse", 800000, NOW, session))
+            refused = empire.snapshot("purse", NOW, session)
+            self.assertEqual(refused["cash_pence"], 0)
+            self.assertEqual(refused["balance"], before["balance"])
+            self.assertNotIn("T11", [car["sign"] for car in refused["cars"]])
+            game.fare_in = 1040
+            game.miles_driven = 7
+            session.commit()
+            earned = empire.snapshot("purse", NOW, session)
+            self.assertEqual(earned["fare_in"], 1040)
+            self.assertEqual(earned["driver_share"], 520)
+            self.assertEqual(earned["fuel"], 140)
+            self.assertEqual(earned["standing"], 15000)
+            self.assertEqual(earned["balance"], 1040 - 520 - 140 - 15000)
+            self.assertLess(earned["balance"], 800000)
+            self.assertIsNone(empire.buy_car("purse", 800000, NOW, session))
+            paid_from = stake_one_car("purse", session, NOW)
+            funded = empire.snapshot("purse", NOW, session)
+            self.assertGreaterEqual(funded["balance"], 800000)
+            self.assertEqual(empire.buy_car("purse", 800000, NOW, session), "T11")
+            after = empire.snapshot("purse", NOW, session)
+            again = empire.buy_car("purse", 800000, NOW, session)
+            stayed = empire.snapshot("purse", NOW, session)
+            other = empire.snapshot("purseother", NOW, session)
+        self.assertEqual(after["cash_pence"], paid_from - 800000)
+        self.assertEqual(after["fare_in"], 1040)
+        self.assertEqual(after["standing"], 1500 * 11)
+        self.assertEqual(after["for_sale"], [])
+        self.assertEqual(
+            after["balance"],
+            after["cash_pence"] + after["fare_in"] - after["driver_share"] - after["fuel"] - after["standing"],
+        )
+        self.assertEqual(after["balance"], funded["balance"] - 800000 - 1500)
+        self.assertLess(after["balance"], 800000)
+        self.assertEqual(again, "T11")
+        self.assertEqual(stayed["cash_pence"], after["cash_pence"])
+        self.assertEqual(len(after["cars"]), 11)
+        self.assertEqual(other["balance"], -15000)
+        self.assertEqual(other["for_sale"][0]["sign"], "T11")
+        self.assertEqual(len(other["cars"]), 10)
+
     def test_driver_share_is_half_the_fare(self) -> None:
         self.assertEqual(empire.driver_share_pence(1040), 520)
         lines = empire.money_lines(10, fare_in=1040)
@@ -2099,6 +2197,7 @@ class EmpireFleetTests(unittest.TestCase):
             rival.leg_started = NOW
             empire.advance_car(rival, game, NOW + 361)
             session.commit()
+            stake_one_car("milefuel", session, NOW + 60)
             self.assertEqual(empire.buy_car("milefuel", 800000, NOW, session), "T11")
             bought = empire.snapshot("milefuel", NOW + 60, session)
             other = empire.snapshot("mileother", NOW + 60, session)
@@ -2307,6 +2406,8 @@ class EmpireFleetTests(unittest.TestCase):
                 "standing",
                 "new_car",
                 "cash_pence",
+                "balance",
+                "for_sale",
                 "firms",
                 "loiter",
             },
@@ -2962,6 +3063,7 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual([car["sign"] for car in later["cars"]], opening)
         with self.Session() as session:
             empire.ensure_game("staybuy", NOW, session)
+            stake_one_car("staybuy", session, NOW)
             self.assertEqual(empire.buy_car("staybuy", 800000, NOW, session), "T11")
             bought = empire.snapshot("staybuy", NOW, session)
             self.assertEqual(bought["people"], [])
@@ -4189,7 +4291,8 @@ class EmpireFleetTests(unittest.TestCase):
             rival.leg_started = NOW
             empire.advance_car(rival, game, NOW + 361)
             session.commit()
-            self.assertEqual(empire.buy_car("tariffa", 800000, NOW, session), "T11")
+            paid_from = stake_one_car("tariffa", session, NOW + 361)
+            self.assertEqual(empire.buy_car("tariffa", 800000, NOW + 361, session), "T11")
             body = empire.snapshot("tariffa", NOW + 361, session)
             other = empire.snapshot("tariffb", NOW + 361, session)
         self.assertEqual(body["fare_in"], 1530)
@@ -4198,7 +4301,7 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["driver_share"], body["fare_in"] // 2)
         self.assertNotEqual(body["fare_in"], 800000)
         self.assertNotEqual(body["fare_in"], 1530 + 800000)
-        self.assertEqual(body["cash_pence"], -800000)
+        self.assertEqual(body["cash_pence"], paid_from - 800000)
         self.assertEqual(body["new_car"], 800000)
         self.assertNotEqual(body["fare_in"], 1530 - 800000)
         self.assertEqual(other["fare_in"], 0)
@@ -4747,6 +4850,7 @@ class EmpireFleetTests(unittest.TestCase):
         with self.Session() as session:
             empire.ensure_game("holdbuy", NOW, session)
             empire.ensure_game("holdoth", NOW, session)
+            paid_from = stake_one_car("holdbuy", session, NOW)
             self.assertEqual(empire.buy_car("holdbuy", 800000, NOW, session), "T11")
             bought = session.scalars(
                 select(EmpireCar).where(EmpireCar.username == "holdbuy", EmpireCar.sign == "T11")
@@ -4781,7 +4885,7 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual([car["sign"] for car in during["cars"]], opening + ["T11"])
         self.assertNotIn("T12", [car["sign"] for car in during["cars"]])
         self.assertEqual(during["fare_in"], 0)
-        self.assertEqual(during["cash_pence"], -800000)
+        self.assertEqual(during["cash_pence"], paid_from - 800000)
         self.assertNotEqual(during["fare_in"], 800000)
         self.assertEqual(len(other["cars"]), 10)
         self.assertEqual(other["cash_pence"], 0)
@@ -4801,6 +4905,7 @@ class EmpireFleetTests(unittest.TestCase):
         with self.Session() as session:
             empire.ensure_game("holdfare", NOW, session)
             empire.ensure_game("holdelse", NOW, session)
+            paid_from = stake_one_car("holdfare", session, NOW)
             self.assertEqual(empire.buy_car("holdfare", 800000, NOW, session), "T11")
             empire.tick_all(NOW + 3, session)
             during = empire.snapshot("holdfare", NOW + 3, session)
@@ -4849,7 +4954,7 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(empire.place_name((chip["lat"], chip["lng"])), "Shiremoor")
         self.assertEqual([car["sign"] for car in during["cars"]], opening + ["T11"])
         self.assertEqual(during["fare_in"], 0)
-        self.assertEqual(during["cash_pence"], -800000)
+        self.assertEqual(during["cash_pence"], paid_from - 800000)
         fare = self._car(after, "T11")
         self.assertEqual(fare["status"], "to_passenger")
         self.assertEqual(fare["job"], "collecting")
@@ -4861,7 +4966,7 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual([car["sign"] for car in after["cars"]], opening + ["T11"])
         self.assertNotIn("T12", [car["sign"] for car in after["cars"]])
         self.assertEqual(after["fare_in"], 0)
-        self.assertEqual(after["cash_pence"], -800000)
+        self.assertEqual(after["cash_pence"], paid_from - 800000)
         self.assertNotEqual(after["fare_in"], 800000)
         self.assertEqual(len(other["cars"]), 10)
         self.assertEqual(other["cash_pence"], 0)
@@ -4870,7 +4975,7 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual([car["sign"] for car in later["cars"]], opening + ["T11"])
         self.assertNotIn("T12", [car["sign"] for car in later["cars"]])
         self.assertEqual(later["fare_in"], 0)
-        self.assertEqual(later["cash_pence"], -800000)
+        self.assertEqual(later["cash_pence"], paid_from - 800000)
         self.assertIn(still_status, ("to_passenger", "with_passenger"))
         self.assertTrue(still_passenger)
         self.assertNotIn(2860, (during["cash_pence"], during["fare_in"], after["fare_in"], after["cash_pence"], later["fare_in"], other["fare_in"]))
