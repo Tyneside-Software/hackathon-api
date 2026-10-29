@@ -33,6 +33,9 @@ LOITER_MAX_KM = 8.0
 EARTH_KM = 6371.0
 KM_PER_MILE = 1.609344
 MPH = 30.0
+CLAIM_MINUTES = 10
+PASSENGER_WAIT_S = CLAIM_MINUTES * 60
+CLAIM_RADIUS_KM = (CLAIM_MINUTES / 60.0) * MPH * KM_PER_MILE
 STANDING_PENCE = 1500
 FUEL_PENCE_PER_MILE = 20
 NEW_CAR_PENCE = 800000
@@ -452,6 +455,68 @@ JOURNEY_KINDS = (
     ("coast", HOMES, COAST, (1, 5, 5, 1, 1)),
     ("short hop", HOMES, HOMES, (3, 4, 3, 2, 2)),
 )
+# Where people live, in approximate thousands, and how widely a hail spreads around that town.
+# The weights follow the built-up population across the circle. The open country stays thin.
+SETTLEMENTS = (
+    ("Newcastle", 54.978, -1.614, 293, 3.2),
+    ("Gateshead", 54.955, -1.610, 196, 3.0),
+    ("Sunderland", 54.906, -1.390, 275, 3.6),
+    ("South Shields", 54.999, -1.432, 75, 2.2),
+    ("Jarrow", 54.982, -1.489, 40, 1.8),
+    ("North Shields", 55.009, -1.455, 40, 1.8),
+    ("Tynemouth", 55.017, -1.430, 20, 1.4),
+    ("Whitley Bay", 55.039, -1.455, 35, 1.8),
+    ("Wallsend", 54.991, -1.534, 45, 1.8),
+    ("Gosforth", 55.007, -1.620, 40, 1.6),
+    ("Heaton", 54.988, -1.570, 30, 1.4),
+    ("Shiremoor", 55.035, -1.510, 12, 1.4),
+    ("Killingworth", 55.033, -1.567, 18, 1.4),
+    ("Cramlington", 55.087, -1.585, 30, 1.8),
+    ("Blyth", 55.127, -1.510, 38, 2.0),
+    ("Ashington", 55.181, -1.570, 28, 1.6),
+    ("Bedlington", 55.133, -1.580, 18, 1.4),
+    ("Morpeth", 55.167, -1.688, 14, 1.6),
+    ("Ponteland", 55.048, -1.745, 11, 1.4),
+    ("Hexham", 54.971, -2.101, 12, 1.6),
+    ("Prudhoe", 54.961, -1.849, 12, 1.4),
+    ("Washington", 54.900, -1.520, 55, 2.4),
+    ("Chester-le-Street", 54.859, -1.574, 25, 1.6),
+    ("Durham", 54.776, -1.575, 48, 2.2),
+    ("Stanley", 54.868, -1.698, 16, 1.4),
+    ("Consett", 54.850, -1.832, 22, 1.6),
+    ("Peterlee", 54.760, -1.340, 22, 1.6),
+    ("Seaham", 54.840, -1.350, 20, 1.4),
+    ("Hartlepool", 54.686, -1.212, 92, 2.4),
+    ("Alnwick", 55.413, -1.706, 8, 1.6),
+    ("Amble", 55.333, -1.578, 6, 1.3),
+    ("Rothbury", 55.309, -1.910, 2, 1.2),
+    ("Wooler", 55.547, -2.015, 2, 1.3),
+    ("Seahouses", 55.581, -1.655, 2, 1.2),
+    ("Belford", 55.600, -1.829, 1, 1.1),
+    ("Bellingham", 55.144, -2.254, 1, 1.1),
+    ("Haltwhistle", 54.971, -2.456, 3, 1.3),
+    ("Allendale", 54.897, -2.258, 1, 1.1),
+    ("Corbridge", 54.974, -2.017, 4, 1.2),
+    ("Alston", 54.812, -2.441, 1, 1.1),
+    ("Brampton", 54.941, -2.735, 4, 1.3),
+    ("Stanhope", 54.747, -2.006, 1, 1.2),
+    ("Bishop Auckland", 54.656, -1.676, 25, 1.8),
+    ("Crook", 54.713, -1.749, 8, 1.4),
+    ("Spennymoor", 54.700, -1.602, 18, 1.6),
+    ("Ferryhill", 54.688, -1.551, 9, 1.4),
+    ("Sedgefield", 54.653, -1.450, 5, 1.3),
+    ("Newton Aycliffe", 54.614, -1.569, 25, 1.8),
+    ("Darlington", 54.525, -1.553, 93, 2.4),
+    ("Barnard Castle", 54.544, -1.925, 5, 1.4),
+    ("Stockton", 54.568, -1.319, 82, 2.2),
+    ("Billingham", 54.605, -1.290, 35, 1.8),
+    ("Middlesbrough", 54.574, -1.235, 140, 2.8),
+    ("Yarm", 54.508, -1.355, 8, 1.3),
+    ("Redcar", 54.616, -1.060, 35, 1.6),
+    ("Guisborough", 54.535, -1.056, 16, 1.4),
+    ("Northallerton", 54.338, -1.436, 16, 1.5),
+    ("Richmond", 54.404, -1.735, 8, 1.4),
+)
 
 
 def place_point(name: str) -> tuple[float, float]:
@@ -664,8 +729,63 @@ def _pick_name(rng: random.Random, names: tuple[str, ...]) -> str:
     return rng.choices(list(names), weights=weights, k=1)[0]
 
 
+def _on_land(lat: float, lng: float) -> bool:
+    """Coarse east coast. The sea sits east of these longitudes. A hail does not stand in the water."""
+    if lat >= 55.62:
+        coast = -1.95
+    elif lat >= 55.50:
+        coast = -1.63
+    elif lat >= 55.35:
+        coast = -1.58
+    elif lat >= 55.20:
+        coast = -1.54
+    elif lat >= 55.08:
+        coast = -1.48
+    elif lat >= 54.97:
+        coast = -1.40
+    elif lat >= 54.85:
+        coast = -1.36
+    elif lat >= 54.75:
+        coast = -1.30
+    elif lat >= 54.66:
+        coast = -1.16
+    elif lat >= 54.58:
+        coast = -1.04
+    else:
+        coast = -0.98
+    return lng <= coast
+
+
+def _scatter_hail(rng: random.Random, drop: tuple[float, float]) -> tuple[float, float]:
+    """One hail on land inside the circle. Towns with more people draw more hails."""
+    weights = [row[3] for row in SETTLEMENTS]
+    for _ in range(48):
+        _name, lat, lng, _weight, spread = rng.choices(SETTLEMENTS, weights=weights, k=1)[0]
+        angle = rng.random() * (2 * math.pi)
+        unit = max(rng.random(), 1e-9)
+        radius_km = min(spread * 2.5, spread * math.sqrt(-2.0 * math.log(unit)))
+        north_km = radius_km * math.cos(angle)
+        east_km = radius_km * math.sin(angle)
+        point = (
+            lat + north_km / 111.0,
+            lng + east_km / (111.0 * max(0.2, math.cos(math.radians(lat)))),
+        )
+        if not inside_circle(point) or not _on_land(point[0], point[1]):
+            continue
+        if haversine_km(point, drop) <= 0.2:
+            continue
+        return point
+    fallback = (CIRCLE_CENTRE[0] + 0.012, CIRCLE_CENTRE[1])
+    if haversine_km(fallback, drop) <= 0.2:
+        fallback = (CIRCLE_CENTRE[0] - 0.012, CIRCLE_CENTRE[1])
+    return fallback
+
+
 def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float, float], tuple[float, float]]:
-    """Draw one journey. The hour changes the weights, not the function."""
+    """Draw one journey. The hour changes the weights, not the function.
+
+    The drop is still a real place. The hail itself can stand anywhere people live inside the circle.
+    """
     rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|{salt}|journey"))
     band = _band_index(now)
     weights = [kind[3][band] for kind in JOURNEY_KINDS]
@@ -685,7 +805,8 @@ def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float
                 break
     if kind_name == "commute" and band == 2:
         pickup_name, drop_name = drop_name, pickup_name
-    return kind_name, place_point(pickup_name), place_point(drop_name)
+    drop = place_point(drop_name)
+    return kind_name, _scatter_hail(rng, drop), drop
 
 
 def _point_key(point: tuple[float, float]) -> tuple[float, float]:
@@ -1082,11 +1203,30 @@ def _people(session: Session, username: str) -> list[EmpirePerson]:
     )
 
 
+def _release_unclaimed(session: Session, username: str, now: float) -> None:
+    """A hail nobody has taken leaves the map. A taxi already on the way keeps its passenger."""
+    removed = False
+    for person in _people(session, username):
+        if person.sign:
+            continue
+        arrived = float(person.arrived or 0)
+        if arrived <= 0:
+            continue
+        if float(now) - arrived < PASSENGER_WAIT_S:
+            continue
+        session.delete(person)
+        removed = True
+    if removed:
+        session.flush()
+
+
 def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
     """Draw the people for this spell, or nobody when it is quiet.
 
     A busy spell may draw more people than there are free taxis. That does not add a car.
+    An unclaimed hail leaves after ten minutes, and the spell may draw another.
     """
+    _release_unclaimed(session, game.username, now)
     target = spell_target(game.username, now)
     for _ in range(20):
         people = _people(session, game.username)
@@ -1114,9 +1254,10 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
 
 
 def _claim_closest(people: list[EmpirePerson], cars: list[EmpireCar], taken: set[str]) -> None:
-    """One free car takes the closest person who still has no taxi.
+    """One free car takes the closest person who is still within ten minutes.
 
-    Equal distances keep the older person and the lower sign. A car on a leg is not here.
+    A hail further away stays for another taxi. Equal distances keep the older person and the lower sign.
+    A car on a leg is not here.
     """
     pending = [person for person in people if not person.sign]
     free = [
@@ -1131,8 +1272,11 @@ def _claim_closest(people: list[EmpirePerson], cars: list[EmpireCar], taken: set
         for person in pending:
             pickup = (float(person.lat), float(person.lng))
             for car in free:
+                distance = haversine_km(car_position(car), pickup)
+                if distance > CLAIM_RADIUS_KM:
+                    continue
                 rank = (
-                    haversine_km(car_position(car), pickup),
+                    distance,
                     int(person.id or 0),
                     int(car.sign[1:]),
                     car.sign,
@@ -1141,6 +1285,8 @@ def _claim_closest(people: list[EmpirePerson], cars: list[EmpireCar], taken: set
                     best_rank = rank
                     best_person = person
                     best_car = car
+        if best_person is None or best_car is None:
+            return
         best_person.sign = best_car.sign
         taken.add(best_car.sign)
         pending.remove(best_person)
