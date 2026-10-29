@@ -135,6 +135,8 @@ class EmpireTableTests(unittest.TestCase):
         self.assertIn("firm", car_columns)
         self.assertIn("depot_lat", car_columns)
         self.assertIn("depot_lng", car_columns)
+        self.assertIn("miles_driven", car_columns)
+        self.assertIn("fare_in", car_columns)
         person_columns = {col["name"] for col in insp.get_columns("empire_people")}
         self.assertIn("drop_lat", person_columns)
         self.assertIn("drop_lng", person_columns)
@@ -401,6 +403,38 @@ class EmpireTableTests(unittest.TestCase):
         self.assertEqual(row.firm, "")
         self.assertEqual(row.depot_lat, 0)
         self.assertEqual(row.depot_lng, 0)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
+    def test_car_totals_columns_are_added_without_wiping_the_car(self) -> None:
+        from app.database import ensure_empire_car_totals_columns
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE empire_cars ("
+                    "id INTEGER PRIMARY KEY, username VARCHAR(64), sign VARCHAR(8), status VARCHAR(32))"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO empire_cars (username, sign, status) VALUES ('ada', 'T1', 'at_depot')")
+            )
+        ensure_empire_car_totals_columns(engine)
+        ensure_empire_car_totals_columns(engine)
+        columns = {col["name"] for col in inspect(engine).get_columns("empire_cars")}
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT username, sign, status, miles_driven, fare_in FROM empire_cars")
+            ).one()
+            count = conn.execute(text("SELECT COUNT(*) FROM empire_cars")).scalar()
+        self.assertIn("miles_driven", columns)
+        self.assertIn("fare_in", columns)
+        self.assertEqual(row.username, "ada")
+        self.assertEqual(row.sign, "T1")
+        self.assertEqual(row.status, "at_depot")
+        self.assertEqual(row.miles_driven, 0)
+        self.assertEqual(row.fare_in, 0)
         self.assertEqual(count, 1)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
@@ -1258,6 +1292,36 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(car["status"], "at_depot")
             self.assertAlmostEqual(car["lat"], 55.0367, places=4)
             self.assertAlmostEqual(car["lng"], -1.5075, places=4)
+            self.assertEqual(car["miles"], 0)
+            self.assertEqual(car["fare_in"], 0)
+            self.assertEqual(car["fuel_pence"], 0)
+            self.assertEqual(car["driver_share"], 0)
+            self.assertEqual(car["company_pence"], 0)
+
+    def test_finished_trip_adds_miles_and_fare_to_that_car(self) -> None:
+        pickup = (55.0, -1.62)
+        drop = empire.destination(pickup, 90, 3.0)
+        with self.Session() as session:
+            game = empire.ensure_game("ada", NOW, session)
+            car = next(item for item in empire._cars(session, "ada") if item.sign == "T1")
+            car.status = "with_passenger"
+            car.passenger = "Mina"
+            car.route_json = json.dumps([[pickup[0], pickup[1]], [drop[0], drop[1]]])
+            car.duration_s = 1
+            car.leg_started = NOW
+            empire.advance_car(car, game, NOW + 1)
+            session.commit()
+            body = empire.snapshot("ada", NOW + 1, session)
+        t1 = self._car(body, "T1")
+        t2 = self._car(body, "T2")
+        fare = empire.north_tyneside_tariff_pence(3.0, 1.0)
+        self.assertGreater(t1["miles"], 2.9)
+        self.assertEqual(t1["fare_in"], fare)
+        self.assertEqual(t1["driver_share"], fare // 2)
+        self.assertEqual(t1["company_pence"], fare - fare // 2)
+        self.assertEqual(t1["fuel_pence"], empire.fuel_pence(t1["miles"]))
+        self.assertEqual(t2["miles"], 0)
+        self.assertEqual(t2["fare_in"], 0)
 
     def test_ten_car_feed_does_not_grow_an_eleventh_sign(self) -> None:
         with self.Session() as session:

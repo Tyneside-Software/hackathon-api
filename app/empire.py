@@ -1202,8 +1202,33 @@ def _start_fare(car: EmpireCar, game: EmpireGame, now: float) -> None:
     _begin(car, game, car_position(car), pickup, now, "to_passenger")
 
 
+def _car_miles(car: EmpireCar) -> float:
+    return float(getattr(car, "miles_driven", 0) or 0)
+
+
+def _car_fare(car: EmpireCar) -> int:
+    return int(getattr(car, "fare_in", 0) or 0)
+
+
+def _add_car_miles(car: EmpireCar, miles: float) -> None:
+    if miles <= 0:
+        return
+    car.miles_driven = _car_miles(car) + float(miles)
+
+
+def _add_car_fare(car: EmpireCar, pence: int) -> None:
+    if pence <= 0:
+        return
+    car.fare_in = _car_fare(car) + int(pence)
+
+
 def _remember_miles(car: EmpireCar) -> None:
     """Keep the miles on a leg that just finished. Another firm's miles stay off this account."""
+    route = _loads(car.route_json, [])
+    if len(route) < 2:
+        return
+    miles = route_miles(route)
+    _add_car_miles(car, miles)
     if car.firm:
         return
     session = object_session(car)
@@ -1212,10 +1237,7 @@ def _remember_miles(car: EmpireCar) -> None:
     game = session.get(EmpireGame, _account_of(car.username))
     if game is None:
         return
-    route = _loads(car.route_json, [])
-    if len(route) < 2:
-        return
-    game.miles_driven = float(game.miles_driven or 0) + route_miles(route)
+    game.miles_driven = float(game.miles_driven or 0) + miles
 
 
 def _finish_empty_move(car: EmpireCar, now: float) -> None:
@@ -1452,6 +1474,7 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         else:
             pickup = (float(car.fare_lat), float(car.fare_lng))
             drop = (float(car.drop_lat), float(car.drop_lng))
+        _add_car_fare(car, tariff)
         if not (car.firm or ""):
             game.fare_in = int(game.fare_in or 0) + tariff
             _remember_trip_booking(game, car, pickup, drop, tariff, now)
@@ -1935,7 +1958,9 @@ def cancel_job(username: str, sign: str, now: float | None = None, session: Sess
         if _job_has_left(car, now):
             if not collecting and not carrying:
                 return False
-            game.miles_driven = float(game.miles_driven or 0) + driven_miles(car, now)
+            driven = driven_miles(car, now)
+            _add_car_miles(car, driven)
+            game.miles_driven = float(game.miles_driven or 0) + driven
         elif not collecting and not waiting_here:
             return False
         if person is not None:
@@ -2219,6 +2244,9 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
     else:
         destination = place_name((float(car.lat), float(car.lng)))
     trip = trip_fields(car)
+    miles = _car_miles(car) + driven_miles(car, now)
+    fare = _car_fare(car)
+    driver = driver_share_pence(fare)
     return {
         "sign": car.sign,
         "colour": car.colour,
@@ -2239,6 +2267,11 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
         "trip_pence": trip["trip_pence"],
         "journey": (car.journey or "") if car.status == "with_passenger" else "",
         "for_sale": car_is_for_sale(car),
+        "miles": round(miles, 4),
+        "fare_in": fare,
+        "fuel_pence": fuel_pence(miles),
+        "driver_share": driver,
+        "company_pence": fare - driver,
     }
 
 
