@@ -5,7 +5,9 @@ import logging
 import os
 import secrets
 
-VERSION = "0.1.27"
+VERSION = "0.1.28"
+# The taxi game reads this from GET /health so a deploy of the page and the API is visible together.
+MARK = "Michael was here"
 log = logging.getLogger("hackathon-api")
 
 # Live buses: one upstream fetch shared by every map tab. TTL is how long we

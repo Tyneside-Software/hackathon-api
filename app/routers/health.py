@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter
 
-from ..config import VERSION
+from ..config import MARK, VERSION
 
 router = APIRouter()
 
@@ -37,4 +37,5 @@ def health() -> dict:
         "service": "hackathon-api",
         "utc": datetime.now(timezone.utc).isoformat(),
         "version": VERSION,
+        "mark": MARK,
     }

@@ -1575,12 +1575,15 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertNotAlmostEqual(lng, lat, places=3)
             self.assertEqual(stamp, NOW)
 
-    def test_health_version_is_0_1_27(self) -> None:
-        from app.config import VERSION
+    def test_health_version_is_0_1_28(self) -> None:
+        from app.config import MARK, VERSION
         from app.routers.health import health
 
-        self.assertEqual(VERSION, "0.1.27")
-        self.assertEqual(health()["version"], "0.1.27")
+        self.assertEqual(VERSION, "0.1.28")
+        self.assertEqual(MARK, "Michael was here")
+        body = health()
+        self.assertEqual(body["version"], "0.1.28")
+        self.assertEqual(body["mark"], "Michael was here")
 
     def test_username_shifts_the_pickup(self) -> None:
         self.test_two_feeds_do_not_share_fare_coordinates()
@@ -1890,7 +1893,9 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertFalse(empire.clock_running())
         with TestClient(app) as client:
             self.assertTrue(empire.clock_running())
-            self.assertEqual(client.get("/health").json()["version"], "0.1.27")
+            body = client.get("/health").json()
+            self.assertEqual(body["version"], "0.1.28")
+            self.assertEqual(body["mark"], "Michael was here")
         self.assertFalse(empire.clock_running())
         after = live.stat().st_mtime if live.exists() else None
         self.assertEqual(before, after)
