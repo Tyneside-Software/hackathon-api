@@ -635,6 +635,7 @@ class EmpireGame(Base):
     loiter_km: Mapped[float] = mapped_column(Float, default=0)
     firm_bookings: Mapped[str] = mapped_column(Text, default="[]")
     trip_bookings: Mapped[str] = mapped_column(Text, default="[]")
+    company_name: Mapped[str] = mapped_column(String(48), default="")
 
 
 class EmpireCar(Base):

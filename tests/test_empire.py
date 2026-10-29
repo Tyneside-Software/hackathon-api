@@ -25,7 +25,7 @@ from sqlalchemy.orm import sessionmaker
 
 import app.empire as empire
 from app.database import Base, SessionLocal
-from app.models import Device, DeviceLink, EmpireCar, EmpireGame, LocationPing  # noqa: F401
+from app.models import Device, DeviceLink, EmpireCar, EmpireGame, EmpirePerson, LocationPing  # noqa: F401
 
 empire.set_route_fn(lambda start, end: None)
 NOW = 1_700_000_000
@@ -1174,6 +1174,80 @@ class EmpireFleetTests(unittest.TestCase):
 
     def _car(self, body: dict, sign: str) -> dict:
         return next(car for car in body["cars"] if car["sign"] == sign)
+
+    def test_shared_houses_see_each_other_and_the_closest_taxi_wins(self) -> None:
+        with self.Session() as session:
+            for name in ("michael", "noah", "reeve"):
+                empire.ensure_game(name, NOW, session)
+            michael = empire.snapshot("michael", NOW, session)
+            noah = empire.snapshot("noah", NOW, session)
+            reeve = empire.snapshot("reeve", NOW, session)
+            self.assertEqual(session.scalar(select(func.count()).select_from(Device)) or 0, 0)
+            for car in session.scalars(select(EmpireCar)).all():
+                if car.username not in empire.SHARED_HOUSES:
+                    continue
+                car.status = "at_depot"
+                car.passenger = ""
+                car.fare_name = ""
+                car.route_json = "[]"
+                car.hold_until = NOW - 1
+            for person in session.scalars(select(EmpirePerson)).all():
+                session.delete(person)
+            ncar = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "noah", EmpireCar.sign == "N1")
+            ).one()
+            session.add(
+                EmpirePerson(
+                    username=empire.WORLD,
+                    name="Sam",
+                    lat=ncar.lat,
+                    lng=ncar.lng,
+                    sign="",
+                    drop_lat=ncar.lat + 0.02,
+                    drop_lng=ncar.lng,
+                    arrived=NOW,
+                    journey="test",
+                )
+            )
+            session.commit()
+            empire.tick_all(NOW, session)
+            claimed = list(session.scalars(select(EmpireCar).where(EmpireCar.passenger == "Sam")).all())
+            michael_sam = [
+                car
+                for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "michael")).all()
+                if car.passenger == "Sam"
+            ]
+            renamed = empire.rename_company("michael", "Monument Cars", NOW, session)
+            rejected = empire.rename_company("michael", "   ", NOW, session)
+            after = empire.snapshot("michael", NOW, session)
+            rival = empire.snapshot("noah", NOW, session)
+            ada = empire.snapshot("ada", NOW, session)
+        self.assertEqual([car["sign"] for car in michael["cars"]], [f"T{index}" for index in range(1, 11)])
+        self.assertEqual([car["sign"] for car in noah["cars"]], [f"N{index}" for index in range(1, 11)])
+        self.assertEqual([car["sign"] for car in reeve["cars"]], [f"S{index}" for index in range(1, 11)])
+        self.assertEqual(michael["company"], "Shiremoor Taxis")
+        self.assertEqual(noah["company"], "North Taxis")
+        self.assertEqual(reeve["company"], "South Taxis")
+        self.assertAlmostEqual(michael["cars"][0]["lat"], empire.DEPOT[0], places=4)
+        self.assertAlmostEqual(michael["cars"][0]["lng"], empire.DEPOT[1], places=4)
+        noah_home = (round(noah["cars"][0]["lat"], 5), round(noah["cars"][0]["lng"], 5))
+        self.assertNotEqual(noah_home, (round(empire.DEPOT[0], 5), round(empire.DEPOT[1], 5)))
+        houses = {firm["firm"]: firm for firm in michael["firms"]}
+        self.assertEqual(set(houses), {"noah", "reeve"})
+        self.assertEqual(len(houses["noah"]["cars"]), 10)
+        self.assertEqual(len(houses["reeve"]["cars"]), 10)
+        self.assertEqual(houses["noah"]["company"], "North Taxis")
+        self.assertEqual(houses["reeve"]["company"], "South Taxis")
+        self.assertEqual(len(claimed), 1)
+        self.assertTrue(claimed[0].sign.startswith("N"))
+        self.assertEqual(michael_sam, [])
+        self.assertEqual(renamed, "Monument Cars")
+        self.assertIsNone(rejected)
+        self.assertEqual(after["company"], "Monument Cars")
+        seen = {firm["firm"]: firm["company"] for firm in rival["firms"]}
+        self.assertEqual(seen["michael"], "Monument Cars")
+        self.assertEqual(ada["company"], "")
+        self.assertEqual([firm["firm"] for firm in ada["firms"]], list(empire.FIRM_NAMES))
 
     def test_fleet_starts_with_ten_cars_at_the_depot(self) -> None:
         with self.Session() as session:
@@ -2429,6 +2503,7 @@ class EmpireFleetTests(unittest.TestCase):
             {
                 "ok",
                 "username",
+                "company",
                 "server_now",
                 "check_s",
                 "trail_s",
@@ -2445,6 +2520,7 @@ class EmpireFleetTests(unittest.TestCase):
                 "balance",
                 "for_sale",
                 "firms",
+                "bookings",
                 "loiter",
             },
         )
@@ -2457,6 +2533,7 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["trail_s"], 600)
         self.assertEqual(body["server_now"], NOW + 3)
         self.assertEqual(body["username"], "ada")
+        self.assertEqual(body["company"], "")
 
     def test_osrm_flag_follows_the_current_leg(self) -> None:
         with self.Session() as session:

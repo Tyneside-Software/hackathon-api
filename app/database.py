@@ -116,6 +116,21 @@ def ensure_empire_trip_bookings_column(bind=None) -> None:
         conn.execute(text("ALTER TABLE empire_games ADD COLUMN trip_bookings TEXT NOT NULL DEFAULT '[]'"))
 
 
+def ensure_empire_company_column(bind=None) -> None:
+    """Add company_name to an existing empire_games table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_games" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_games")}
+    if "company_name" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_games ADD COLUMN company_name VARCHAR(48) NOT NULL DEFAULT ''"))
+
+
 def ensure_empire_bookings_column(bind=None) -> None:
     """Add firm_bookings to an existing empire_games table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -270,6 +285,7 @@ def init_db() -> None:
         ensure_empire_loiter_columns(engine)
         ensure_empire_bookings_column(engine)
         ensure_empire_trip_bookings_column(engine)
+        ensure_empire_company_column(engine)
         ensure_empire_job_column(engine)
         ensure_empire_car_journey_column(engine)
         ensure_empire_firm_columns(engine)

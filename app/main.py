@@ -35,8 +35,9 @@ from app.routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    from app.empire import start_clock, stop_clock
+    from app.empire import bootstrap_shared_houses, start_clock, stop_clock
 
+    bootstrap_shared_houses()
     start_clock()
     try:
         yield

@@ -68,6 +68,14 @@ OPENING_SIGNS = frozenset(sign for sign, _colour, _offset in CARS)
 FIRM_NAMES = ("north", "south")
 FIRM_PREFIX = {"north": "N", "south": "S"}
 FIRM_BOOKINGS_KEPT = 12
+# One shared passenger queue. The key is not a username the register form accepts.
+WORLD = "*world"
+RESET_FLAG = "shared-20261029"
+SHARED_HOUSES = {
+    "michael": {"company": "Shiremoor Taxis", "prefix": "T", "depot": "shiremoor"},
+    "noah": {"company": "North Taxis", "prefix": "N", "depot": "north"},
+    "reeve": {"company": "South Taxis", "prefix": "S", "depot": "south"},
+}
 STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning", "to_better_spot")
 JOBS = ("waiting", "travelling to a better spot", "collecting", "carrying", "returning", "on break")
 BERWICK = (55.7692, -2.0084)
@@ -302,6 +310,7 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
     try:
         game = session.get(EmpireGame, username)
         if game is None:
+            house = SHARED_HOUSES.get(username)
             game = EmpireGame(
                 username=username,
                 created_at=str(int(now)),
@@ -311,52 +320,31 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
                 miles_driven=0,
                 firm_bookings="[]",
                 trip_bookings="[]",
+                company_name=house["company"] if house else "",
             )
             session.add(game)
-            for sign, colour, offset in CARS:
-                session.add(
-                    EmpireCar(
-                        username=username,
-                        sign=sign,
-                        colour=colour,
-                        status="at_depot",
-                        passenger="",
-                        lat=DEPOT[0],
-                        lng=DEPOT[1],
-                        route_json="[]",
-                        duration_s=0,
-                        leg_started=now,
-                        osrm=False,
-                        trail_json="[]",
-                        fare_name="",
-                        job="waiting",
-                        hold_until=now + offset,
-                        next_check=now + CHECK_S,
-                        depart_offset=offset,
-                    )
-                )
-            ensure_firms(username, now, session)
+            _add_opening_cars(session, username, now)
+            if username in SHARED_HOUSES:
+                _ensure_world(session, now)
+            else:
+                ensure_firms(username, now, session)
             session.commit()
         elif not _cars(session, username):
-            for sign, colour, offset in CARS:
-                session.add(
-                    EmpireCar(
-                        username=username,
-                        sign=sign,
-                        colour=colour,
-                        status="at_depot",
-                        job="waiting",
-                        lat=DEPOT[0],
-                        lng=DEPOT[1],
-                        hold_until=now + offset,
-                        next_check=now + CHECK_S,
-                        depart_offset=offset,
-                    )
-                )
-            ensure_firms(username, now, session)
+            _add_opening_cars(session, username, now)
+            if username in SHARED_HOUSES:
+                _ensure_world(session, now)
+                _remember_company(game)
+            else:
+                ensure_firms(username, now, session)
             session.commit()
-        elif ensure_firms(username, now, session):
-            session.commit()
+        else:
+            dirty = False
+            if username in SHARED_HOUSES:
+                dirty = _ensure_world(session, now) or _remember_company(game)
+            elif ensure_firms(username, now, session):
+                dirty = True
+            if dirty:
+                session.commit()
         return game
     finally:
         if own_session:
@@ -849,6 +837,94 @@ def firm_key(username: str, firm: str) -> str:
     return f"{normalise_username(username)}|{firm}"
 
 
+def _people_key(username: str) -> str:
+    """Shared houses read one passenger queue. Every other account keeps its own."""
+    account = _account_of(username)
+    if account in SHARED_HOUSES:
+        return WORLD
+    return account
+
+
+def _sign_index(sign: str) -> int:
+    tail = (sign or "")[1:]
+    return int(tail) if tail.isdigit() else 0
+
+
+def _opening_sign(username: str, number: int) -> str:
+    house = SHARED_HOUSES.get(username)
+    prefix = house["prefix"] if house else "T"
+    return f"{prefix}{number}"
+
+
+def house_depot(username: str) -> tuple[float, float]:
+    """Michael stays at Shiremoor. Noah and Reeve each keep one seeded depot."""
+    house = SHARED_HOUSES.get(username)
+    if house is None or house["depot"] == "shiremoor":
+        return DEPOT
+    return firm_depots(WORLD)[house["depot"]]
+
+
+def _add_opening_cars(session: Session, username: str, now: float) -> None:
+    depot = house_depot(username) if username in SHARED_HOUSES else DEPOT
+    at_shiremoor = depot == DEPOT
+    for sign, colour, offset in CARS:
+        number = int(sign[1:])
+        session.add(
+            EmpireCar(
+                username=username,
+                sign=_opening_sign(username, number),
+                colour=colour,
+                status="at_depot",
+                passenger="",
+                lat=depot[0],
+                lng=depot[1],
+                depot_lat=0.0 if at_shiremoor else depot[0],
+                depot_lng=0.0 if at_shiremoor else depot[1],
+                route_json="[]",
+                duration_s=0,
+                leg_started=now,
+                osrm=False,
+                trail_json="[]",
+                fare_name="",
+                job="waiting",
+                hold_until=now + offset,
+                next_check=now + CHECK_S,
+                depart_offset=offset,
+            )
+        )
+
+
+def _ensure_world(session: Session, now: float) -> bool:
+    """One passenger queue for the three houses. This row has no taxis."""
+    world = session.get(EmpireGame, WORLD)
+    if world is not None:
+        return False
+    session.add(
+        EmpireGame(
+            username=WORLD,
+            created_at=str(int(now)),
+            name_index=0,
+            cash_pence=0,
+            fare_in=0,
+            miles_driven=0,
+            firm_bookings="[]",
+            trip_bookings="[]",
+            company_name="",
+        )
+    )
+    session.flush()
+    return True
+
+
+def _remember_company(game: EmpireGame) -> bool:
+    """Fill a blank company name. A rename already stored on the row stays."""
+    house = SHARED_HOUSES.get(game.username)
+    if house is None or (game.company_name or "").strip():
+        return False
+    game.company_name = house["company"]
+    return True
+
+
 def firm_depot(
     username: str,
     firm: str,
@@ -971,7 +1047,7 @@ def _should_break(car: EmpireCar, now: float) -> bool:
     session = object_session(car)
     if session is None:
         return False
-    people = _people(session, _account_of(car.username))
+    people = _people(session, _people_key(car.username))
     if any(person.sign == car.sign for person in people):
         return False
     free = sum(
@@ -1187,7 +1263,7 @@ def _allocated_person(car: EmpireCar) -> EmpirePerson | None:
         return None
     return session.scalar(
         select(EmpirePerson).where(
-            EmpirePerson.username == _account_of(car.username),
+            EmpirePerson.username == _people_key(car.username),
             EmpirePerson.sign == car.sign,
         )
     )
@@ -1229,7 +1305,7 @@ def _collected_person_leaves(car: EmpireCar) -> None:
         return
     person = session.scalar(
         select(EmpirePerson).where(
-            EmpirePerson.username == _account_of(car.username),
+            EmpirePerson.username == _people_key(car.username),
             EmpirePerson.sign == car.sign,
         )
     )
@@ -1503,7 +1579,7 @@ def _purchase_pause_just_ended(car: EmpireCar) -> bool:
 
     Opening cars and other firms do not match. A later pause has already run a route.
     """
-    if car.sign in OPENING_SIGNS or (car.firm or ""):
+    if car.sign in OPENING_SIGNS or (car.firm or "") or 1 <= _sign_index(car.sign) <= 10:
         return False
     if car.osrm or car.passenger or car.fare_name:
         return False
@@ -1532,7 +1608,7 @@ def _take_first_bought_fare(
         if haversine_km(pickup, drop) <= 0.05:
             continue
         person = EmpirePerson(
-            username=account,
+            username=_people_key(account),
             name=_next_name(game),
             lat=pickup[0],
             lng=pickup[1],
@@ -1566,7 +1642,7 @@ def _travel_to_a_better_spot(
     """
     fleet_name = draw_as or game.username
     patch = loiter_for_fleet(game, draw_as)
-    people = _people(session, game.username)
+    people = _people(session, _people_key(game.username))
     claimed = {person.sign: person for person in people if person.sign}
     cars = _fleet_cars(session, fleet_name) if draw_as else _cars(session, game.username)
     free = sum(1 for car in cars if car.status == "at_depot" and car_may_depart(car))
@@ -1657,7 +1733,14 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
         session = SessionLocal()
     try:
         games = list(session.scalars(select(EmpireGame)).all())
+        shared = [game for game in games if game.username in SHARED_HOUSES]
+        if shared:
+            _ensure_world(session, now)
+            world = session.get(EmpireGame, WORLD)
+            _ensure_waiting_person(world, session, now)
         for game in games:
+            if game.username == WORLD or game.username in SHARED_HOUSES:
+                continue
             ensure_firms(game.username, now, session)
             _ensure_waiting_person(game, session, now)
             for car in _cars(session, game.username):
@@ -1678,6 +1761,23 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             _allocate_firm_leftovers(game, session)
             for firm in FIRM_NAMES:
                 _travel_to_a_better_spot(game, session, now, draw_as=firm_key(game.username, firm))
+        if shared:
+            for game in shared:
+                for car in _cars(session, game.username):
+                    try:
+                        advance_car(car, game, now)
+                    except Exception:
+                        log.exception("empire car %s %s failed", car.username, car.sign)
+            world = session.get(EmpireGame, WORLD)
+            _ensure_waiting_person(world, session, now)
+            people = _people(session, WORLD)
+            taken = {person.sign for person in people if person.sign}
+            rivals: list[EmpireCar] = []
+            for game in shared:
+                rivals.extend(_cars(session, game.username))
+            _claim_closest(people, rivals, taken)
+            for game in shared:
+                _travel_to_a_better_spot(game, session, now)
         session.commit()
     finally:
         if own_session:
@@ -1701,7 +1801,7 @@ def new_car_may_leave(paid_pence: int) -> bool:
 
 def car_may_depart(car: EmpireCar) -> bool:
     """The opening ten may leave. A bought car may leave only after it is paid for."""
-    if car.sign in OPENING_SIGNS:
+    if car.sign in OPENING_SIGNS or 1 <= _sign_index(car.sign) <= 10:
         return True
     return car.depart_offset >= 0
 
@@ -1727,10 +1827,11 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
         now = time.time()
     try:
         game = ensure_game(username, now, session)
+        bought = _opening_sign(username, 11)
         cars = _cars(session, username)
-        existing = next((car for car in cars if car.sign == "T11"), None)
+        existing = next((car for car in cars if car.sign == bought), None)
         if existing is not None and existing.depart_offset >= 0:
-            return "T11"
+            return bought
         if account_balance(game, cars, now) < NEW_CAR_PENCE:
             return None
         if existing is not None:
@@ -1739,18 +1840,22 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
             existing.hold_until = now + DEPOT_PAUSE_S
             game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
             session.commit()
-            return "T11"
+            return bought
         game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
+        home = house_depot(username)
+        at_shiremoor = home == DEPOT
         session.add(
             EmpireCar(
                 username=username,
-                sign="T11",
+                sign=bought,
                 colour="#2dd4bf",
                 status="at_depot",
                 job="waiting",
                 passenger="",
-                lat=DEPOT[0],
-                lng=DEPOT[1],
+                lat=home[0],
+                lng=home[1],
+                depot_lat=0.0 if at_shiremoor else home[0],
+                depot_lng=0.0 if at_shiremoor else home[1],
                 route_json="[]",
                 duration_s=0,
                 leg_started=now,
@@ -1763,7 +1868,7 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
             )
         )
         session.commit()
-        return "T11"
+        return bought
     finally:
         if own_session:
             session.close()
@@ -2137,6 +2242,31 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
     }
 
 
+def _rival_rows(session: Session, username: str, now: float) -> list[dict]:
+    """The other two houses, as firms. Their finished fares stay on their own game."""
+    rows = []
+    for other, house in SHARED_HOUSES.items():
+        if other == username:
+            continue
+        other_game = session.get(EmpireGame, other)
+        cars = _cars(session, other)
+        if other_game is None or not cars:
+            continue
+        home = car_depot(cars[0])
+        company = (other_game.company_name or "").strip() or house["company"]
+        rows.append(
+            {
+                "firm": other,
+                "company": company,
+                "depot": [home[0], home[1]],
+                "cars": [_public_car(car, now) for car in cars],
+                "bookings": [],
+                "fare_in": int(other_game.fare_in or 0),
+            }
+        )
+    return rows
+
+
 def snapshot(username: str, now: float | None = None, session: Session | None = None) -> dict:
     username = normalise_username(username)
     if now is None:
@@ -2163,12 +2293,19 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                     }
                 )
         by_sign = {car.sign: car for car in cars}
-        for firm in FIRM_NAMES:
-            for car in _fleet_cars(session, firm_key(username, firm)):
-                by_sign[car.sign] = car
+        if username in SHARED_HOUSES:
+            for other in SHARED_HOUSES:
+                if other == username:
+                    continue
+                for car in _cars(session, other):
+                    by_sign[car.sign] = car
+        else:
+            for firm in FIRM_NAMES:
+                for car in _fleet_cars(session, firm_key(username, firm)):
+                    by_sign[car.sign] = car
         people = []
         for person in session.scalars(
-            select(EmpirePerson).where(EmpirePerson.username == username).order_by(EmpirePerson.id)
+            select(EmpirePerson).where(EmpirePerson.username == _people_key(username)).order_by(EmpirePerson.id)
         ).all():
             locked = by_sign.get(person.sign) if person.sign else None
             people.append(
@@ -2188,25 +2325,30 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
         lines = money_lines(len(cars), fare_in=fare_in, miles=miles)
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
         balance = account_balance(game, cars, now)
-        firms = []
-        for firm in FIRM_NAMES:
-            rows = _fleet_cars(session, firm_key(username, firm))
-            if not rows:
-                continue
-            home = car_depot(rows[0])
-            bookings = [] if game is None else _public_bookings(game, firm)
-            firms.append(
-                {
-                    "firm": firm,
-                    "depot": [home[0], home[1]],
-                    "cars": [_public_car(car, now) for car in rows],
-                    "bookings": bookings,
-                    "fare_in": sum(int(row["pence"]) for row in bookings),
-                }
-            )
+        if username in SHARED_HOUSES:
+            firms = _rival_rows(session, username, now)
+        else:
+            firms = []
+            for firm in FIRM_NAMES:
+                rows = _fleet_cars(session, firm_key(username, firm))
+                if not rows:
+                    continue
+                home = car_depot(rows[0])
+                bookings = [] if game is None else _public_bookings(game, firm)
+                firms.append(
+                    {
+                        "firm": firm,
+                        "depot": [home[0], home[1]],
+                        "cars": [_public_car(car, now) for car in rows],
+                        "bookings": bookings,
+                        "fare_in": sum(int(row["pence"]) for row in bookings),
+                    }
+                )
+        company = "" if game is None else (game.company_name or "").strip()
         return {
             "ok": True,
             "username": username,
+            "company": company,
             "server_now": int(now),
             "check_s": CHECK_S,
             "trail_s": TRAIL_S,
@@ -2235,3 +2377,72 @@ def game_count(username: str, session: Session) -> int:
     return int(
         session.scalar(select(func.count()).select_from(EmpireGame).where(EmpireGame.username == username)) or 0
     )
+
+
+def rename_company(
+    username: str,
+    name: str,
+    now: float | None = None,
+    session: Session | None = None,
+) -> str | None:
+    """Store a company name. Empty and over-long names change nothing."""
+    cleaned = (name or "").strip()
+    if not cleaned or len(cleaned) > 48:
+        return None
+    username = normalise_username(username)
+    own_session = session is None
+    if session is None:
+        session = SessionLocal()
+    if now is None:
+        now = time.time()
+    try:
+        game = ensure_game(username, now, session)
+        game.company_name = cleaned
+        session.commit()
+        return cleaned
+    finally:
+        if own_session:
+            session.close()
+
+
+def bootstrap_shared_houses() -> None:
+    """Replace users and empire rows once, when EMPIRE_RESET=1 and the flag is unset.
+
+    The board, bus cache, devices, and location pings stay. A second boot sees the flag and leaves the rows.
+    """
+    import os
+
+    if os.getenv("EMPIRE_RESET") != "1":
+        return
+    from sqlalchemy import delete
+
+    from .models import BoardMeta, DeviceLink, FriendLink, ShopProfile, User
+    from .schemas import UserCreate
+
+    session = SessionLocal()
+    try:
+        flag = session.get(BoardMeta, "empire_reset")
+        if flag is not None and (flag.value or "") == RESET_FLAG:
+            return
+        session.execute(delete(EmpirePerson))
+        session.execute(delete(EmpireCar))
+        session.execute(delete(EmpireGame))
+        session.execute(delete(DeviceLink))
+        session.execute(delete(FriendLink))
+        session.execute(delete(ShopProfile))
+        session.execute(delete(User))
+        if flag is not None:
+            session.delete(flag)
+        session.commit()
+    finally:
+        session.close()
+    for username in SHARED_HOUSES:
+        User.create(UserCreate(username=username, password="Hello123!"))
+        ensure_game(username)
+    session = SessionLocal()
+    try:
+        session.add(BoardMeta(key="empire_reset", value=RESET_FLAG))
+        session.commit()
+    finally:
+        session.close()
+    log.info("shared world reset for michael, noah, reeve")

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..dependencies import get_current_active_user
-from ..empire import NEW_CAR_PENCE, buy_car, cancel_job, set_loiter, snapshot
+from ..empire import NEW_CAR_PENCE, buy_car, cancel_job, rename_company, set_loiter, snapshot
 from ..models import User
 
 router = APIRouter()
@@ -28,8 +28,26 @@ class EmpireLoiter(BaseModel):
     firm: str = ""
 
 
+class EmpireCompany(BaseModel):
+    name: str
+
+
 @router.get("/v1/empire")
 def empire_feed(current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    return snapshot(current_user.username)
+
+
+@router.post("/v1/empire/company")
+def empire_company(
+    body: EmpireCompany,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict:
+    """Rename this account's taxi company. The fleet stays."""
+    if rename_company(current_user.username, body.name) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A company name needs 1 to 48 characters",
+        )
     return snapshot(current_user.username)
 
 
