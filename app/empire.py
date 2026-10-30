@@ -369,11 +369,17 @@ def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tu
     and starts it again from the same spot.
     """
     route, duration, osrm = build_route(start, end)
+    door = [float(end[0]), float(end[1])]
     if len(route) < 2:
-        route = [[float(start[0]), float(start[1])], [float(end[0]), float(end[1])]]
+        route = [[float(start[0]), float(start[1])], door]
     else:
         route[0] = [float(start[0]), float(start[1])]
-        route[-1] = [float(end[0]), float(end[1])]
+        last = route[-1]
+        gap = haversine_km((float(last[0]), float(last[1])), (door[0], door[1]))
+        if gap > 0.02:
+            route.append(door)
+        else:
+            route[-1] = door
     car.status = status
     car.route_json = json.dumps(route)
     car.duration_s = max(float(duration), 0.001)
@@ -1969,8 +1975,12 @@ def _route_end(car: EmpireCar) -> tuple[float, float] | None:
     return (float(route[-1][0]), float(route[-1][1]))
 
 
+# A driving route finishes on the nearest road. That can sit well short of the door.
+ROAD_HAIL_KM = 2.0
+
+
 def _near_hail(point: tuple[float, float], person: EmpirePerson) -> bool:
-    return haversine_km(point, _hail_point(person)) <= 0.05
+    return haversine_km(point, _hail_point(person)) <= ROAD_HAIL_KM
 
 
 def _leg_follows_a_hail(car: EmpireCar, end: tuple[float, float]) -> bool:
