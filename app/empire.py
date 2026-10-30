@@ -26,6 +26,7 @@ log = logging.getLogger("hackathon-api")
 DEPOT = (55.0367, -1.5075)
 EMPTY_MOVE_MILES = 2
 EMPTY_MOVE_KM = EMPTY_MOVE_MILES * 1.609344
+# Newcastle. 50 miles: 50 * 1.609344 km.
 CIRCLE_CENTRE = (54.9783, -1.6178)
 CIRCLE_RADIUS_KM = 80.467
 LOITER_MIN_KM = 0.2
@@ -445,15 +446,109 @@ HOSPITALS = (
     "the RVI",
     "the Freeman",
 )
-# One table for every kind of journey. Weights are morning, day, evening, night, and the small hours.
-# A zero weight means that kind is not drawn in that band. 800000 is not a weight.
+# Roles for the places already published above. A home is not in this table.
+PLACE_ROLES = {
+    "Cobalt": ("work",),
+    "Regent Centre": ("work",),
+    "Grey's Monument": ("work",),
+    "the Quayside": ("work", "night"),
+    "Haymarket": ("station", "work", "arrival"),
+    "Four Lane Ends": ("station", "arrival"),
+    "Central Station": ("station", "arrival"),
+    "Silverlink": ("shop",),
+    "Royal Quays": ("shop",),
+    "Whitley Bay": ("coast", "night"),
+    "Spanish City": ("coast", "night"),
+    "Cullercoats": ("coast",),
+    "Tynemouth": ("coast", "night"),
+    "North Shields": ("coast",),
+    "Osborne Road": ("night",),
+    "North Tyneside General at Rake Lane": ("hospital",),
+    "the RVI": ("hospital",),
+    "the Freeman": ("hospital",),
+    "Newcastle Airport": ("airport", "arrival"),
+}
+# Real sites across the circle. The coordinate is the building, not a town centre guess.
+# Homes stay out of this list and are scattered around the town where that journey starts.
+SPOTS = (
+    ("Teesside Airport", 54.50941, -1.42479, ("airport", "arrival")),
+    ("Durham Station", 54.77996, -1.58197, ("station", "arrival")),
+    ("Darlington Station", 54.52067, -1.54666, ("station", "arrival")),
+    ("Middlesbrough Station", 54.57915, -1.23451, ("station", "arrival")),
+    ("Sunderland Station", 54.90554, -1.38237, ("station", "arrival")),
+    ("Hexham Station", 54.97303, -2.09476, ("station", "arrival")),
+    ("Morpeth Station", 55.16274, -1.67961, ("station", "arrival")),
+    ("Chester-le-Street Station", 54.85454, -1.57825, ("station", "arrival")),
+    ("Hartlepool Station", 54.68666, -1.20764, ("station", "arrival")),
+    ("Alnmouth Station", 55.39285, -1.63663, ("station", "arrival")),
+    ("QE Gateshead", 54.93883, -1.58015, ("hospital",)),
+    ("Sunderland Royal", 54.90277, -1.40871, ("hospital",)),
+    ("James Cook", 54.55200, -1.20853, ("hospital",)),
+    ("University Hospital North Durham", 54.78872, -1.59318, ("hospital",)),
+    ("NSECH Cramlington", 55.07490, -1.56871, ("hospital",)),
+    ("Wansbeck General", 55.18412, -1.54516, ("hospital",)),
+    ("Darlington Memorial", 54.53066, -1.56364, ("hospital",)),
+    ("University Hospital Hartlepool", 54.70211, -1.22803, ("hospital",)),
+    ("Metrocentre", 54.95889, -1.66493, ("shop",)),
+    ("Eldon Square", 54.97418, -1.61455, ("shop",)),
+    ("Dalton Park", 54.81453, -1.37452, ("shop",)),
+    ("Teesside Park", 54.55446, -1.27227, ("shop",)),
+    ("The Bridges", 54.90616, -1.38314, ("shop",)),
+    ("Quorum Business Park", 55.01897, -1.58464, ("work",)),
+    ("Newcastle Helix", 54.97267, -1.62767, ("work",)),
+    ("Team Valley", 54.93392, -1.61900, ("work",)),
+    ("Nissan", 54.90784, -1.48927, ("work",)),
+    ("NETPark", 54.67019, -1.45384, ("work",)),
+    ("Aykley Heads", 54.78937, -1.58767, ("work",)),
+    ("Wilton", 54.58946, -1.11234, ("work",)),
+    ("Port of Tyne", 54.99250, -1.45222, ("work",)),
+    ("Newcastle University", 54.98018, -1.61468, ("university",)),
+    ("Northumbria University", 54.97786, -1.60707, ("university",)),
+    ("University of Sunderland", 54.90439, -1.39179, ("university",)),
+    ("Teesside University", 54.56953, -1.23554, ("university",)),
+    ("Durham Cathedral", 54.77326, -1.57633, ("university", "outing")),
+    ("St James' Park", 54.97547, -1.62187, ("stadium",)),
+    ("Stadium of Light", 54.91440, -1.38826, ("stadium",)),
+    ("Riverside Stadium", 54.57831, -1.21692, ("stadium",)),
+    ("Kingston Park", 55.01867, -1.67227, ("stadium",)),
+    ("North Shields Ferry", 55.00377, -1.44406, ("ferry",)),
+    ("Vermont Hotel", 54.96914, -1.60956, ("hotel",)),
+    ("Hilton Newcastle Gateshead", 54.96611, -1.60647, ("hotel",)),
+    ("Sandman Signature", 54.97359, -1.62196, ("hotel",)),
+    ("Maldron Hotel", 54.97162, -1.61629, ("hotel",)),
+    ("Grand Hotel Tynemouth", 55.02221, -1.42356, ("hotel",)),
+    ("Ramside Hall", 54.79636, -1.51995, ("hotel",)),
+    ("Rockliffe Hall", 54.47858, -1.54582, ("hotel",)),
+    ("Bigg Market", 54.97127, -1.61399, ("night",)),
+    ("Walkergate", 54.77819, -1.57608, ("night",)),
+    ("Linthorpe Road", 54.56068, -1.24269, ("night",)),
+    ("Seaburn", 54.93395, -1.36962, ("coast",)),
+    ("Redcar Esplanade", 54.61879, -1.06403, ("coast",)),
+    ("Seaham Marina", 54.83794, -1.32808, ("coast",)),
+    ("Bamburgh Castle", 55.60944, -1.71127, ("coast", "outing")),
+    ("Beamish Museum", 54.88573, -1.65980, ("outing",)),
+    ("Angel of the North", 54.91412, -1.58952, ("outing",)),
+    ("Alnwick Castle", 55.41547, -1.70649, ("outing",)),
+)
+# name, origin role, destination role, weights for morning/day/evening/night/small hours,
+# shortest km, longest km, bands that swap the ends, and "half" or "late" when either way is normal.
+# "home" is a street in a town. Every other role is a named building. 800000 is not a weight.
+# A zero stays zero at that hour. _week_weight raises the kinds that already belong to the day.
 JOURNEY_KINDS = (
-    ("commute", HOMES, MORNING_DROPS, (8, 2, 6, 0, 1)),
-    ("night out", NIGHT_PICKUPS, HOMES, (0, 1, 4, 8, 1)),
-    ("hospital", HOMES, HOSPITALS, (2, 3, 2, 2, 3)),
-    ("airport", (AIRPORT_NAME,), TOWN + COAST, (2, 2, 2, 3, 2)),
-    ("coast", HOMES, COAST, (1, 5, 5, 1, 1)),
-    ("short hop", HOMES, HOMES, (3, 4, 3, 2, 2)),
+    ("commute", "home", "work", (12, 2, 10, 0, 2), 2.0, 26.0, (2,), ""),
+    ("station", "home", "station", (4, 3, 4, 3, 2), 0.8, 18.0, (2, 3), ""),
+    ("airport", "home", "airport", (3, 3, 3, 3, 2), 3.0, 75.0, (), "half"),
+    ("hospital", "home", "hospital", (3, 4, 3, 2, 4), 1.2, 30.0, (), "late"),
+    ("university", "home", "university", (4, 3, 2, 0, 0), 1.0, 28.0, (2,), ""),
+    ("shopping", "home", "shop", (1, 6, 3, 0, 0), 1.2, 22.0, (), ""),
+    ("coast", "home", "coast", (1, 5, 4, 1, 0), 2.5, 45.0, (), ""),
+    ("day out", "home", "outing", (0, 4, 2, 0, 0), 3.0, 55.0, (), ""),
+    ("night out", "night", "home", (0, 1, 6, 16, 3), 0.8, 16.0, (2,), ""),
+    ("hotel", "hotel", "arrival", (2, 2, 2, 2, 2), 0.35, 55.0, (), "half"),
+    ("shift", "home", "work", (2, 1, 2, 2, 5), 2.0, 28.0, (3, 4), ""),
+    ("short hop", "home", "home", (3, 4, 3, 2, 2), 0.4, 3.5, (), ""),
+    ("match", "stadium", "station", (0, 1, 3, 2, 0), 0.35, 18.0, (), "half"),
+    ("ferry", "home", "ferry", (1, 2, 2, 1, 1), 1.5, 40.0, (), "half"),
 )
 # Where people live, in approximate thousands, and how widely a hail spreads around that town.
 # The weights follow the built-up population across the circle. The open country stays thin.
@@ -534,6 +629,9 @@ def place_name(point: tuple[float, float]) -> str:
             return name
     if haversine_km((float(point[0]), float(point[1])), DEPOT) <= 0.3:
         return "Shiremoor"
+    for name, lat, lng, _roles in SPOTS:
+        if (round(lat, 5), round(lng, 5)) == key:
+            return name
     return ""
 
 
@@ -700,28 +798,42 @@ def _engine_seed(username: str, key: str) -> int:
     return total
 
 
-def _spell_key(now: float) -> str:
+def _london_local(now: float) -> datetime:
+    """Europe/London civil time. The weekly clock uses this, not the machine zone."""
     utc = datetime.fromtimestamp(now, tz=timezone.utc)
-    local = utc + timedelta(hours=_london_offset_hours(utc))
+    return utc + timedelta(hours=_london_offset_hours(utc))
+
+
+def _spell_key(now: float) -> str:
+    local = _london_local(now)
     return f"{local.date().isoformat()}|{_band_index(now)}"
 
 
-def spell_target(username: str, now: float) -> int:
-    """How many people this spell draws.
+# Standing hails, Monday..Sunday, then morning/day/evening/night/small hours.
+# Spread across the 50-mile circle by the towns, not grown with the fleet.
+# The quietest hour is the baseline. Weekday mornings, Friday night, and Saturday sit much higher.
+WEEK_DEMAND = (
+    (800, 420, 760, 380, 280),
+    (820, 420, 760, 380, 280),
+    (820, 430, 760, 390, 280),
+    (800, 440, 780, 440, 300),
+    (760, 460, 820, 720, 460),
+    (300, 640, 700, 780, 520),
+    (280, 600, 520, 400, 280),
+)
 
-    A quiet spell can be zero. A morning or evening spell is busier than the ten taxis.
+
+def spell_target(username: str, now: float) -> int:
+    """How many hails stand on the map during this spell.
+
+    Every hour of the week keeps the baseline. A rush or a weekend night adds many more.
+    A small fleet never empties the stock. A fleet near the peak leaves some taxis idle
+    until a collected or expired hail frees a slot.
     """
+    local = _london_local(now)
     band = _band_index(now)
-    if band == 3:
-        return 1
     rng = random.Random(_engine_seed(username, _spell_key(now) + "|target"))
-    if band == 0:
-        return 11 + rng.randrange(0, 4)
-    if band == 1:
-        return 1 + rng.randrange(0, 3)
-    if band == 2:
-        return 11 + rng.randrange(0, 3)
-    return rng.choices((0, 1), weights=(3, 1))[0]
+    return WEEK_DEMAND[local.weekday()][band] + rng.randrange(0, 20)
 
 
 def _pick_name(rng: random.Random, names: tuple[str, ...]) -> str:
@@ -756,57 +868,204 @@ def _on_land(lat: float, lng: float) -> bool:
     return lng <= coast
 
 
-def _scatter_hail(rng: random.Random, drop: tuple[float, float]) -> tuple[float, float]:
-    """One hail on land inside the circle. Towns with more people draw more hails."""
-    weights = [row[3] for row in SETTLEMENTS]
-    for _ in range(48):
-        _name, lat, lng, _weight, spread = rng.choices(SETTLEMENTS, weights=weights, k=1)[0]
+def _pool(role: str) -> tuple[tuple[str, float, float], ...]:
+    """Named buildings in one journey pool. Homes are not in a pool."""
+    found: list[tuple[str, float, float]] = []
+    for name, lat, lng in PLACES:
+        if role in PLACE_ROLES.get(name, ()):
+            found.append((name, float(lat), float(lng)))
+    for name, lat, lng, roles in SPOTS:
+        if role in roles:
+            found.append((name, float(lat), float(lng)))
+    return tuple(found)
+
+
+def _offset_km(lat: float, lng: float, north_km: float, east_km: float) -> tuple[float, float]:
+    return (
+        lat + north_km / 111.0,
+        lng + east_km / (111.0 * max(0.2, math.cos(math.radians(lat)))),
+    )
+
+
+def _scatter_around(rng: random.Random, lat: float, lng: float, spread_km: float) -> tuple[float, float] | None:
+    """A residential point around a town. The building pins are not moved."""
+    for _ in range(24):
         angle = rng.random() * (2 * math.pi)
         unit = max(rng.random(), 1e-9)
-        radius_km = min(spread * 2.5, spread * math.sqrt(-2.0 * math.log(unit)))
-        north_km = radius_km * math.cos(angle)
-        east_km = radius_km * math.sin(angle)
-        point = (
-            lat + north_km / 111.0,
-            lng + east_km / (111.0 * max(0.2, math.cos(math.radians(lat)))),
-        )
-        if not inside_circle(point) or not _on_land(point[0], point[1]):
+        radius_km = min(spread_km * 2.2, spread_km * math.sqrt(-2.0 * math.log(unit)))
+        radius_km = max(radius_km, 0.15)
+        point = _offset_km(lat, lng, radius_km * math.cos(angle), radius_km * math.sin(angle))
+        if inside_circle(point) and _on_land(point[0], point[1]):
+            return point
+    return None
+
+
+def _home_near(
+    rng: random.Random,
+    anchor: tuple[float, float],
+    min_km: float,
+    max_km: float,
+) -> tuple[float, float] | None:
+    """A street in a town that can actually reach this building. Bigger towns weigh more."""
+    span = max(8.0, (max_km - min_km) * 0.65)
+    rows: list[tuple[float, float, float]] = []
+    weights: list[float] = []
+    for _name, lat, lng, pop, spread in SETTLEMENTS:
+        dist = haversine_km((lat, lng), anchor)
+        if dist > max_km + spread or dist + spread < min_km:
             continue
-        if haversine_km(point, drop) <= 0.2:
+        rows.append((lat, lng, spread))
+        weights.append(max(pop, 1) * math.exp(-max(0.0, dist - min_km) / span))
+    if not rows:
+        return None
+    lat, lng, spread = rng.choices(rows, weights=weights, k=1)[0]
+    for _ in range(16):
+        point = _scatter_around(rng, lat, lng, spread)
+        if point is None:
             continue
-        return point
-    fallback = (CIRCLE_CENTRE[0] + 0.012, CIRCLE_CENTRE[1])
-    if haversine_km(fallback, drop) <= 0.2:
-        fallback = (CIRCLE_CENTRE[0] - 0.012, CIRCLE_CENTRE[1])
-    return fallback
+        dist = haversine_km(point, anchor)
+        if min_km <= dist <= max_km and dist > 0.25:
+            return point
+    return None
+
+
+def _short_hop(rng: random.Random, min_km: float, max_km: float) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Two streets in the same town. A short hop does not cross the county."""
+    weights = [row[3] for row in SETTLEMENTS]
+    for _attempt in range(40):
+        _name, lat, lng, _pop, spread = rng.choices(list(SETTLEMENTS), weights=weights, k=1)[0]
+        local = min(spread, 1.8)
+        first = _scatter_around(rng, lat, lng, local)
+        second = _scatter_around(rng, lat, lng, local)
+        if first is None or second is None:
+            continue
+        if min_km <= haversine_km(first, second) <= max_km:
+            return first, second
+    centre = (SETTLEMENTS[0][1], SETTLEMENTS[0][2])
+    return centre, _offset_km(centre[0], centre[1], 0.6, 0.4)
+
+
+def _ends_for(
+    rng: random.Random,
+    origin_role: str,
+    dest_role: str,
+    min_km: float,
+    max_km: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """One pair for this kind. The building stays put. The home is chosen to fit the distance."""
+    if origin_role == "home" and dest_role == "home":
+        return _short_hop(rng, min_km, max_km)
+    for relax in (1.0, 1.6, 3.0):
+        lo = min_km / relax
+        hi = max_km * relax
+        for _attempt in range(40):
+            pickup: tuple[float, float] | None = None
+            drop: tuple[float, float] | None = None
+            if origin_role == "home":
+                pin = rng.choice(_pool(dest_role))
+                home = _home_near(rng, (pin[1], pin[2]), lo, hi)
+                if home is None:
+                    continue
+                pickup, drop = home, (pin[1], pin[2])
+            elif dest_role == "home":
+                pin = rng.choice(_pool(origin_role))
+                home = _home_near(rng, (pin[1], pin[2]), lo, hi)
+                if home is None:
+                    continue
+                pickup, drop = (pin[1], pin[2]), home
+            else:
+                origin = rng.choice(_pool(origin_role))
+                dest = rng.choice(_pool(dest_role))
+                if origin[0] == dest[0]:
+                    continue
+                pickup, drop = (origin[1], origin[2]), (dest[1], dest[2])
+            dist = haversine_km(pickup, drop)
+            if dist <= 0.25 or dist < lo or dist > hi:
+                continue
+            if not inside_circle(pickup) or not inside_circle(drop):
+                continue
+            if not _on_land(pickup[0], pickup[1]) or not _on_land(drop[0], drop[1]):
+                continue
+            return pickup, drop
+    return place_point("Grey's Monument"), place_point("Central Station")
+
+
+def _is_saturday(now: float) -> bool:
+    return _london_local(now).weekday() == 5
+
+
+def _week_weight(name: str, base: int, band: int, weekday: int) -> int:
+    """The hour weight, reshaped by the day. A zero stays zero.
+
+    Weekday mornings and evenings push the commute. Friday and Saturday push the night out.
+    Saturday and Sunday push shops, the coast, and a day out, and quiet the office rush.
+    """
+    if base <= 0:
+        return 0
+    weekend = weekday >= 5
+    friday = weekday == 4
+    if name == "commute":
+        if weekend:
+            return 1 if band in (0, 2) else min(base, 2)
+        if band in (0, 2):
+            return base + 10
+        return base
+    if name == "university" and weekend:
+        return 1
+    if name == "shopping" and band == 1:
+        if weekday == 5:
+            return base + 12
+        if weekday == 6:
+            return base + 6
+    if name == "coast" and weekend and band in (1, 2):
+        return base + 6
+    if name == "day out" and weekend and band in (1, 2):
+        return base + 8
+    if name == "night out":
+        if friday and band in (2, 3):
+            return base + 14
+        if weekday == 5 and band in (2, 3, 4):
+            return base + 16
+        if weekday == 6 and band in (2, 3):
+            return max(1, base // 3)
+    if name == "match":
+        if weekday == 5:
+            return base + 8
+        if weekday == 6 and band in (1, 2):
+            return base + 5
+        if weekday == 2 and band in (2, 3):
+            return base + 2
+    if name == "airport" and (weekend or friday):
+        return base + 2
+    if name == "shift" and band in (3, 4):
+        return base + 2
+    return base
 
 
 def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float, float], tuple[float, float]]:
-    """Draw one journey. The hour changes the weights, not the function.
+    """Draw one journey kind, then a fitting origin and destination.
 
-    The drop is still a real place. The hail itself can stand anywhere people live inside the circle.
+    The hour changes which kinds are busy, and the day raises the ones that belong to it.
+    A commute in the evening runs back home. An airport, hotel, or ferry trip runs either way.
+    A home is a street in a likely town. A station, hospital, hotel, or workplace stays on that building.
     """
     rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|{salt}|journey"))
+    local = _london_local(now)
     band = _band_index(now)
-    weights = [kind[3][band] for kind in JOURNEY_KINDS]
+    weekday = local.weekday()
+    weights = [_week_weight(kind[0], kind[3][band], band, weekday) for kind in JOURNEY_KINDS]
     if sum(weights) <= 0:
         weights = [1] * len(JOURNEY_KINDS)
-    kind_name, pickups, drops, _weights = rng.choices(list(JOURNEY_KINDS), weights=weights, k=1)[0]
-    pickup_name = _pick_name(rng, pickups)
-    drop_name = _pick_name(rng, drops)
-    for _ in range(8):
-        if drop_name != pickup_name:
-            break
-        drop_name = _pick_name(rng, drops)
-    if drop_name == pickup_name:
-        for name in drops:
-            if name != pickup_name:
-                drop_name = name
-                break
-    if kind_name == "commute" and band == 2:
-        pickup_name, drop_name = drop_name, pickup_name
-    drop = place_point(drop_name)
-    return kind_name, _scatter_hail(rng, drop), drop
+    kind_name, origin_role, dest_role, _weights, min_km, max_km, reverse, flip = rng.choices(
+        list(JOURNEY_KINDS), weights=weights, k=1
+    )[0]
+    if band in reverse:
+        origin_role, dest_role = dest_role, origin_role
+    if flip == "half" or (flip == "late" and band == 4):
+        if rng.random() < 0.5:
+            origin_role, dest_role = dest_role, origin_role
+    pickup, drop = _ends_for(rng, origin_role, dest_role, min_km, max_km)
+    return kind_name, pickup, drop
 
 
 def _point_key(point: tuple[float, float]) -> tuple[float, float]:
@@ -1221,21 +1480,24 @@ def _release_unclaimed(session: Session, username: str, now: float) -> None:
 
 
 def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> None:
-    """Draw the people for this spell, or nobody when it is quiet.
+    """Keep this spell's standing stock of hails filled.
 
-    A busy spell may draw more people than there are free taxis. That does not add a car.
-    An unclaimed hail leaves after ten minutes, and the spell may draw another.
+    A collected or expired hail frees a slot and the next call draws another.
+    Claimed people who have not been collected still count toward the cap.
+    A bad draw is skipped. The cap is the demand, not the size of the fleet.
     """
     _release_unclaimed(session, game.username, now)
     target = spell_target(game.username, now)
-    for _ in range(20):
-        people = _people(session, game.username)
-        if len(people) >= target:
-            return
+    have = len(_people(session, game.username))
+    added = False
+    attempts = 0
+    while have < target and attempts < target + 64:
+        attempts += 1
         index = int(game.name_index or 0)
         kind, pickup, drop = draw_journey(game.username, now, f"person-{index}")
+        game.name_index = index + 1
         if not inside_circle(pickup) or not inside_circle(drop) or pickup == drop:
-            return
+            continue
         session.add(
             EmpirePerson(
                 username=game.username,
@@ -1249,22 +1511,30 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
                 journey=kind,
             )
         )
-        game.name_index = index + 1
+        have += 1
+        added = True
+    if added:
         session.flush()
+
+
+def _can_take_a_hail(car: EmpireCar) -> bool:
+    """A taxi at the depot, or one already driving toward a hail, may take it once it is in range.
+
+    Collecting, carrying, and returning stay on that leg. Seeing a hail is not claiming it.
+    """
+    if not car_may_depart(car) or car.passenger or car.fare_name:
+        return False
+    return car.status == "at_depot" or car.status == "to_better_spot"
 
 
 def _claim_closest(people: list[EmpirePerson], cars: list[EmpireCar], taken: set[str]) -> None:
     """One free car takes the closest person who is still within ten minutes.
 
-    A hail further away stays for another taxi. Equal distances keep the older person and the lower sign.
-    A car on a leg is not here.
+    A hail further away stays on the map for a taxi to drive toward. Equal distances keep
+    the older person and the lower sign. A car on a collecting, carrying, or returning leg is not here.
     """
     pending = [person for person in people if not person.sign]
-    free = [
-        car
-        for car in cars
-        if car.status == "at_depot" and car.sign not in taken and car_may_depart(car)
-    ]
+    free = [car for car in cars if car.sign not in taken and _can_take_a_hail(car)]
     while pending and free:
         best_rank = None
         best_person = None
@@ -1297,8 +1567,11 @@ def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
     """Each waiting person is claimed by the closest free taxi. A car on a leg is left alone.
 
     People left over do not add a car. Two people do not claim the same taxi.
+    A loiter order keeps this fleet in the patch, so these cars do not take a hail.
     The app session does not autoflush, so this reads the cars already in memory.
     """
+    if loiter_for_fleet(game, None) is not None:
+        return
     people = _people(session, game.username)
     taken = {person.sign for person in people if person.sign}
     _claim_closest(people, _cars(session, game.username), taken)
@@ -1313,7 +1586,10 @@ def _allocate_firm_leftovers(game: EmpireGame, session: Session) -> None:
     taken = {person.sign for person in people if person.sign}
     firm_cars: list[EmpireCar] = []
     for firm in FIRM_NAMES:
-        firm_cars.extend(_fleet_cars(session, firm_key(game.username, firm)))
+        key = firm_key(game.username, firm)
+        if loiter_for_fleet(game, key) is not None:
+            continue
+        firm_cars.extend(_fleet_cars(session, key))
     _claim_closest(people, firm_cars, taken)
     session.flush()
 
@@ -1675,6 +1951,81 @@ def _check_in(car: EmpireCar, now: float) -> None:
     car.trail_json = json.dumps(trail)
 
 
+def _hail_point(person: EmpirePerson) -> tuple[float, float]:
+    return (float(person.lat), float(person.lng))
+
+
+def _route_end(car: EmpireCar) -> tuple[float, float] | None:
+    route = _loads(car.route_json, [])
+    if len(route) < 2:
+        return None
+    return (float(route[-1][0]), float(route[-1][1]))
+
+
+def _near_hail(point: tuple[float, float], person: EmpirePerson) -> bool:
+    return haversine_km(point, _hail_point(person)) <= 0.05
+
+
+def _leg_follows_a_hail(car: EmpireCar, end: tuple[float, float]) -> bool:
+    """True when this empty leg is the drive toward a hail this taxi may still take.
+
+    A wander of more than two miles still stops. A hunt across the circle does not.
+    """
+    session = object_session(car)
+    if session is None:
+        return False
+    for person in _people(session, _people_key(car.username)):
+        if person.sign and person.sign != car.sign:
+            continue
+        if _near_hail(end, person):
+            return True
+    return False
+
+
+def _open_hail_at(car: EmpireCar, people: list[EmpirePerson]) -> EmpirePerson | None:
+    """The unclaimed hail this hunt is already driving to, if that hail is still waiting."""
+    end = _route_end(car)
+    if end is None:
+        return None
+    for person in people:
+        if person.sign:
+            continue
+        if _near_hail(end, person):
+            return person
+    return None
+
+
+def _nearest_open_hail(
+    origin: tuple[float, float],
+    people: list[EmpirePerson],
+    reserved: set[int],
+) -> EmpirePerson | None:
+    """The closest unclaimed hail no other idle taxi in this fleet is already hunting."""
+    best: EmpirePerson | None = None
+    best_rank: tuple[float, int] | None = None
+    for person in people:
+        if person.sign or int(person.id or 0) in reserved:
+            continue
+        rank = (haversine_km(origin, _hail_point(person)), int(person.id or 0))
+        if best_rank is None or rank < best_rank:
+            best_rank = rank
+            best = person
+    return best
+
+
+def _drive_toward_hail(car: EmpireCar, game: EmpireGame, person: EmpirePerson, now: float) -> None:
+    """Drive toward a hail the taxi can see. The claim waits until the car is in range."""
+    start = car_position(car, car_depot(car))
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+    _begin(car, game, start, _hail_point(person), now, "to_better_spot")
+    _store_job(car)
+
+
 def _stop_far_empty_leg(car: EmpireCar, now: float) -> None:
     """A passengerless empty leg whose end is still more than two miles away stops here."""
     here = (float(car.lat), float(car.lng))
@@ -1701,7 +2052,7 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
         if len(route) >= 2:
             here = (float(car.lat), float(car.lng))
             end = (float(route[-1][0]), float(route[-1][1]))
-            if haversine_km(here, end) > EMPTY_MOVE_KM:
+            if haversine_km(here, end) > EMPTY_MOVE_KM and not _leg_follows_a_hail(car, end):
                 _stop_far_empty_leg(car, now)
                 _store_job(car)
                 _check_in(car, now)
@@ -1795,16 +2146,26 @@ def _take_first_bought_fare(
     return False
 
 
+def _clear_empty(car: EmpireCar) -> None:
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+
+
 def _travel_to_a_better_spot(
     game: EmpireGame,
     session: Session,
     now: float,
     draw_as: str | None = None,
 ) -> None:
-    """Claimed taxis collect their own person. Everyone else hunts or takes a break.
+    """Claimed taxis collect. Idle taxis drive toward a hail they can see.
 
-    Each idle taxi draws its own spot, so the cars do not stack and do not share one path.
-    A car that is collecting, carrying, or returning keeps that leg.
+    A loiter order comes before the hunt. Two idle taxis in one fleet do not hunt the same hail.
+    The claim itself still waits until the car is within ten minutes.
+    When no hail is left, a taxi may take a break or move to a place within two miles.
     The depot is for a break. 800000 is not a fare.
     Another firm passes its own draw seed. The player's seed stays the bare username.
     A bought car takes one fare inside the circle when its four-second purchase pause ends.
@@ -1819,29 +2180,35 @@ def _travel_to_a_better_spot(
     for car in cars:
         if car.status == "at_depot":
             continue
-        route = _loads(car.route_json, [])
-        if len(route) >= 2:
-            taken.append((float(route[-1][0]), float(route[-1][1])))
+        end = _route_end(car)
+        if end is not None:
+            taken.append(end)
+    reserved: set[int] = set()
+    pending: list[EmpireCar] = []
     for car in cars:
         try:
             if _fault is not None and _fault(car):
                 raise RuntimeError("empire car fault")
-            if car.status != "at_depot" or not car_may_depart(car):
-                continue
-            if now < float(car.hold_until):
-                continue
+            hunting = car.status == "to_better_spot" and not car.passenger and not car.fare_name
+            parked = car.status == "at_depot" and car_may_depart(car) and now >= float(car.hold_until)
             person = claimed.get(car.sign)
-            if person is not None:
-                _collect_claimed(car, game, person, now)
+            if person is not None and not car.passenger and not car.fare_name:
+                if hunting or parked:
+                    _collect_claimed(car, game, person, now)
                 continue
-            if _take_first_bought_fare(car, game, session, now, taken):
+            if not hunting and not parked:
+                continue
+            if parked and _take_first_bought_fare(car, game, session, now, taken):
                 continue
             depot = car_depot(car)
             start = car_position(car, depot)
             if patch is not None:
                 centre, radius = patch
                 if _inside_loiter(start, centre, radius) and not _point_taken(start, tuple(taken)):
-                    if float(car.hold_until) - float(car.leg_started) >= BREAK_S - 1:
+                    if hunting:
+                        _stop_far_empty_leg(car, now)
+                        _store_job(car)
+                    elif float(car.hold_until) - float(car.leg_started) >= BREAK_S - 1:
                         car.leg_started = now
                         car.hold_until = now
                         _store_job(car)
@@ -1854,23 +2221,38 @@ def _travel_to_a_better_spot(
                     taken.append(start)
                     continue
                 taken.append(spot)
-                car.passenger = ""
-                car.fare_name = ""
-                car.fare_lat = 0.0
-                car.fare_lng = 0.0
-                car.drop_lat = 0.0
-                car.drop_lng = 0.0
+                _clear_empty(car)
                 _begin(car, game, start, spot, now, "to_better_spot")
                 _store_job(car)
                 continue
+            if hunting:
+                aimed = _open_hail_at(car, people)
+                if aimed is not None:
+                    reserved.add(int(aimed.id or 0))
+                    continue
+            pending.append(car)
+        except Exception:
+            log.exception("empire car %s %s failed", car.username, car.sign)
+    waiting = [person for person in people if not person.sign]
+    for car in pending:
+        try:
+            if _fault is not None and _fault(car):
+                raise RuntimeError("empire car fault")
+            depot = car_depot(car)
+            start = car_position(car, depot)
+            hail = _nearest_open_hail(start, people, reserved)
+            if hail is not None:
+                reserved.add(int(hail.id or 0))
+                _drive_toward_hail(car, game, hail, now)
+                continue
+            if waiting:
+                if car.status == "to_better_spot":
+                    _stop_far_empty_leg(car, now)
+                    _store_job(car)
+                continue
             if car_takes_a_break(fleet_name, car.sign, now, len(people), free):
                 if haversine_km(start, depot) > 0.05:
-                    car.passenger = ""
-                    car.fare_name = ""
-                    car.fare_lat = 0.0
-                    car.fare_lng = 0.0
-                    car.drop_lat = 0.0
-                    car.drop_lng = 0.0
+                    _clear_empty(car)
                     _begin(car, game, start, depot, now, "returning")
                 else:
                     _sit_on_break(car, now, depot)
@@ -1882,12 +2264,7 @@ def _travel_to_a_better_spot(
             if haversine_km(start, spot) <= 0.05:
                 continue
             taken.append(spot)
-            car.passenger = ""
-            car.fare_name = ""
-            car.fare_lat = 0.0
-            car.fare_lng = 0.0
-            car.drop_lat = 0.0
-            car.drop_lng = 0.0
+            _clear_empty(car)
             _begin(car, game, start, spot, now, "to_better_spot")
             _store_job(car)
         except Exception:
@@ -1943,6 +2320,8 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             taken = {person.sign for person in people if person.sign}
             rivals: list[EmpireCar] = []
             for game in shared:
+                if loiter_for_fleet(game, None) is not None:
+                    continue
                 rivals.extend(_cars(session, game.username))
             _claim_closest(people, rivals, taken)
             for game in shared:
