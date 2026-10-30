@@ -5577,6 +5577,60 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertGreater(empire.haversine_km((stopped.lat, stopped.lng), airport), empire.EMPTY_MOVE_KM)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_a_road_route_that_stops_short_of_the_hail_still_keeps_the_hunt(self) -> None:
+        hail = empire.destination(empire.DEPOT, 90, 8)
+        short = empire.destination(hail, 270, 0.25)
+        self.assertGreater(empire.haversine_km(empire.DEPOT, hail), empire.EMPTY_MOVE_KM)
+        self.assertGreater(empire.haversine_km(hail, short), 0.05)
+
+        def snapped(start, end):
+            missed = empire.destination(end, 270, 0.25)
+            return {
+                "points": [[start[0], start[1]], [missed[0], missed[1]]],
+                "duration_s": 900,
+            }
+
+        empire.set_route_fn(snapped)
+        with self.Session() as session:
+            game = empire.ensure_game("snaphunt", NOW, session)
+            for car in session.scalars(select(EmpireCar).where(EmpireCar.username == "snaphunt")).all():
+                if car.sign != "T1":
+                    car.hold_until = NOW + 100000
+            session.add(
+                empire.EmpirePerson(
+                    username="snaphunt",
+                    name="Mina",
+                    lat=hail[0],
+                    lng=hail[1],
+                    sign="",
+                    drop_lat=hail[0],
+                    drop_lng=hail[1],
+                    arrived=NOW,
+                    journey="short hop",
+                )
+            )
+            session.commit()
+            empire._travel_to_a_better_spot(game, session, NOW)
+            session.commit()
+            car = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "snaphunt", EmpireCar.sign == "T1")
+            ).one()
+            route = empire._loads(car.route_json, [])
+            self.assertEqual(car.status, "to_better_spot")
+            self.assertAlmostEqual(route[-1][0], hail[0], places=5)
+            self.assertAlmostEqual(route[-1][1], hail[1], places=5)
+            self.assertGreater(empire.haversine_km((route[-1][0], route[-1][1]), short), 0.2)
+            started = car.leg_started
+            origin = (car.lat, car.lng)
+            empire.advance_car(car, game, NOW + 40)
+            empire._travel_to_a_better_spot(game, session, NOW + 40)
+            session.commit()
+            session.refresh(car)
+            self.assertEqual(car.status, "to_better_spot")
+            self.assertEqual(car.leg_started, started)
+            self.assertGreater(empire.haversine_km(origin, (car.lat, car.lng)), 0.05)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_journey_types_use_the_real_places_people_travel_between(self) -> None:
         seen = {(round(lat, 5), round(lng, 5)) for _name, lat, lng in empire.PLACES}
         for name, lat, lng, _roles in empire.SPOTS:

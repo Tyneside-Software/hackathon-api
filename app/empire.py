@@ -362,11 +362,18 @@ def _next_name(game: EmpireGame) -> str:
 
 
 def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tuple[float, float], now: float, status: str) -> None:
-    """Start the leg where the car already is. Do not snap the start back to Shiremoor."""
+    """Start the leg where the car already is. Do not snap the start back to Shiremoor.
+
+    A road route often finishes on the nearest road, short of the hail. The stored leg
+    still ends on the exact point, or the next tick treats the hunt as a far empty move
+    and starts it again from the same spot.
+    """
     route, duration, osrm = build_route(start, end)
-    if not route:
-        route = [[start[0], start[1]], [end[0], end[1]]]
-    route[0] = [float(start[0]), float(start[1])]
+    if len(route) < 2:
+        route = [[float(start[0]), float(start[1])], [float(end[0]), float(end[1])]]
+    else:
+        route[0] = [float(start[0]), float(start[1])]
+        route[-1] = [float(end[0]), float(end[1])]
     car.status = status
     car.route_json = json.dumps(route)
     car.duration_s = max(float(duration), 0.001)
