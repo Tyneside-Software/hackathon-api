@@ -39,11 +39,20 @@ PASSENGER_WAIT_S = CLAIM_MINUTES * 60
 CLAIM_RADIUS_KM = (CLAIM_MINUTES / 60.0) * MPH * KM_PER_MILE
 STANDING_PENCE = 1500
 FUEL_PENCE_PER_MILE = 20
-NEW_CAR_PENCE = 800000
+NEW_CAR_PENCE = 50_000
+SELL_CAR_PENCE = 40_000
+# The old car price. A leaked 800000 is still not a fare. A real trip may cost 50000.
+NOT_A_FARE_PENCE = 800_000
 CHECK_S = 10
 TRAIL_S = 600
 DEPOT_PAUSE_S = 4
 BREAK_S = 180
+WORK_DAY_S = 12 * 3600
+WORK_WEEK_S = 60 * 3600
+STINT_S = 4 * 3600
+BREAK_NEED_S = 3600
+MIN_WORKING = 2
+DUTY_TICK_CAP_S = 5.0
 STAGGER_S = 7
 PICKUP_MILES = 1.2
 DROP_MILES = 3.0
@@ -216,6 +225,32 @@ def _loads(raw: str, fallback: list) -> list:
     except json.JSONDecodeError:
         return list(fallback)
     return got if isinstance(got, list) else list(fallback)
+
+
+def _duty(car: EmpireCar) -> dict:
+    try:
+        got = json.loads(getattr(car, "duty_json", "") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _save_duty(car: EmpireCar, duty: dict) -> None:
+    car.duty_json = json.dumps(duty)
+
+
+def _hours_resting(car: EmpireCar) -> bool:
+    """True while this driver is on the mandatory break or asleep at home."""
+    return str(_duty(car).get("kind") or "") in ("break", "day", "week")
+
+
+def _stored_home(car: EmpireCar) -> tuple[float, float] | None:
+    duty = _duty(car)
+    lat = float(duty.get("home_lat") or 0)
+    lng = float(duty.get("home_lng") or 0)
+    if lat == 0.0 and lng == 0.0:
+        return None
+    return (lat, lng)
 
 
 def _straight(start: tuple[float, float], end: tuple[float, float]) -> tuple[list, float, bool]:
@@ -1534,7 +1569,10 @@ def _can_take_a_hail(car: EmpireCar) -> bool:
     """A taxi at the depot, or one already driving toward a hail, may take it once it is in range.
 
     Collecting, carrying, and returning stay on that leg. Seeing a hail is not claiming it.
+    A driver on a break or asleep does not take one.
     """
+    if _hours_resting(car):
+        return False
     if not car_may_depart(car) or car.passenger or car.fare_name:
         return False
     return car.status == "at_depot" or car.status == "to_better_spot"
@@ -1693,6 +1731,8 @@ def _finish_empty_move(car: EmpireCar, now: float) -> None:
 
 def current_job(car: EmpireCar) -> str:
     """One job. The four movement statuses stay the words they already are."""
+    if _hours_resting(car):
+        return "on break"
     if car.status == "to_better_spot":
         return "travelling to a better spot"
     if car.status == "to_passenger":
@@ -1786,7 +1826,7 @@ def _remember_trip_booking(
     if (car.firm or "").strip():
         return
     pence = int(pence)
-    if pence == NEW_CAR_PENCE:
+    if pence == NOT_A_FARE_PENCE:
         return
     rows = _trip_rows(game)
     rows.append(
@@ -1805,7 +1845,7 @@ def _public_trip_bookings(game: EmpireGame) -> list[dict]:
     out = []
     for row in _trip_rows(game):
         pence = int(row.get("pence") or 0)
-        if pence == NEW_CAR_PENCE:
+        if pence == NOT_A_FARE_PENCE:
             continue
         out.append(
             {
@@ -1838,7 +1878,7 @@ def _remember_firm_booking(
     if firm not in FIRM_NAMES:
         return
     pence = int(pence)
-    if pence == NEW_CAR_PENCE:
+    if pence == NOT_A_FARE_PENCE:
         return
     rows = _booking_rows(game)
     rows.append(
@@ -1943,6 +1983,9 @@ def _finish_leg(car: EmpireCar, game: EmpireGame, now: float) -> None:
         car.duration_s = 0
         car.leg_started = now
         car.osrm = True
+        if _hours_resting(car):
+            _sit_at_home(car, now)
+            return
         if _should_break(car, now):
             car.hold_until = now + BREAK_S
             car.job = "on break"
@@ -1982,6 +2025,9 @@ def _near_hail(point: tuple[float, float], person: EmpirePerson) -> bool:
 def _far_leg_may_continue(car: EmpireCar, game: EmpireGame, end: tuple[float, float]) -> bool:
     """A hunt, or a drive into the loiter patch, may be longer than two miles."""
     if _leg_follows_a_hail(car, end):
+        return True
+    home = _stored_home(car)
+    if _hours_resting(car) and home is not None and haversine_km(end, home) <= ROAD_HAIL_KM:
         return True
     draw_as = car.username if (car.firm or "") else None
     patch = loiter_for_fleet(game, draw_as)
@@ -2180,6 +2226,291 @@ def _clear_empty(car: EmpireCar) -> None:
     car.drop_lng = 0.0
 
 
+def _london_stamp(local: datetime) -> float:
+    """Unix time for a naive Europe/London civil time. Midnight is never the clock-change hour."""
+    wall = local.replace(tzinfo=None)
+    for offset in (0, 1):
+        utc = (wall - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
+        if _london_offset_hours(utc) == offset:
+            return utc.timestamp()
+    return wall.replace(tzinfo=timezone.utc).timestamp()
+
+
+def _next_london_midnight(now: float) -> float:
+    local = _london_local(now)
+    nxt = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return _london_stamp(nxt)
+
+
+def _next_london_monday(now: float) -> float:
+    local = _london_local(now)
+    days = (7 - local.weekday()) % 7
+    if days == 0:
+        days = 7
+    monday = (local + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return _london_stamp(monday)
+
+
+def _week_key(now: float) -> str:
+    local = _london_local(now)
+    return f"{local.isocalendar().year}-W{local.isocalendar().week:02d}"
+
+
+def _on_passenger_leg(car: EmpireCar) -> bool:
+    if car.passenger or car.fare_name:
+        return True
+    return car.status in ("to_passenger", "with_passenger")
+
+
+def _release_uncollected(car: EmpireCar) -> None:
+    """A driver going home drops a hail they have not reached yet."""
+    if car.passenger or car.fare_name:
+        return
+    person = _allocated_person(car)
+    if person is None:
+        return
+    person.sign = ""
+
+
+def _sleep_home_point(
+    username: str,
+    sign: str,
+    centre: tuple[float, float],
+    radius_km: float,
+    taken: tuple[tuple[float, float], ...],
+) -> tuple[float, float]:
+    """A stable point inside the loiter patch. The same taxi keeps the same door."""
+    last = centre
+    for attempt in range(24):
+        rng = random.Random(_engine_seed(username, f"sleep-home|{sign}|{attempt}"))
+        bearing = rng.random() * 360.0
+        dist_km = max(0.04, radius_km * 0.9 * math.sqrt(rng.random()))
+        point = destination(centre, bearing, dist_km / KM_PER_MILE)
+        last = point
+        if _inside_loiter(point, centre, radius_km) and not _point_taken(point, taken):
+            return point
+    number = _sign_index(sign) or 1
+    for step in range(36):
+        bearing = float((step * 37 + number * 17) % 360)
+        point = destination(centre, bearing, max(0.03, radius_km * 0.45) / KM_PER_MILE)
+        last = point
+        if _inside_loiter(point, centre, radius_km) and not _point_taken(point, taken):
+            return point
+    return last
+
+
+def _depot_home_point(username: str, sign: str, depot: tuple[float, float]) -> tuple[float, float]:
+    """A stable door near the depot when this fleet has no loiter patch yet."""
+    rng = random.Random(_engine_seed(username, f"sleep-home|{sign}|depot"))
+    point = destination(depot, rng.random() * 360.0, 0.2 + rng.random() * 0.5)
+    if inside_circle(point):
+        return point
+    return depot
+
+
+def _ensure_sleep_home(
+    car: EmpireCar,
+    game: EmpireGame,
+    draw_as: str | None,
+    taken: list[tuple[float, float]],
+) -> tuple[float, float]:
+    """Home is inside the loiter patch. A moved patch gets a new door."""
+    duty = _duty(car)
+    home = _stored_home(car)
+    patch = loiter_for_fleet(game, draw_as)
+    if patch is not None:
+        centre, radius = patch
+        if home is None or not _inside_loiter(home, centre, radius):
+            home = _sleep_home_point(car.username, car.sign, centre, radius, tuple(taken))
+    elif home is None:
+        home = _depot_home_point(car.username, car.sign, car_depot(car))
+    if home is not None:
+        duty["home_lat"] = home[0]
+        duty["home_lng"] = home[1]
+        _save_duty(car, duty)
+        taken.append(home)
+    return home or car_depot(car)
+
+
+def _roll_duty_calendar(duty: dict, now: float) -> None:
+    """A new London day or week starts the counters again. The drive home still finishes."""
+    day = _london_local(now).date().isoformat()
+    week = _week_key(now)
+    if duty.get("day") != day:
+        duty["day"] = day
+        duty["day_s"] = 0.0
+    if duty.get("week") != week:
+        duty["week"] = week
+        duty["week_s"] = 0.0
+
+
+def _at_sleep_home(car: EmpireCar) -> bool:
+    home = _stored_home(car)
+    if home is None:
+        return False
+    return haversine_km(car_position(car), home) <= 0.08
+
+
+def _clear_finished_rest(car: EmpireCar, duty: dict, now: float) -> None:
+    if not duty.get("kind"):
+        return
+    if now + 1e-6 < float(duty.get("until") or 0):
+        return
+    if not _at_sleep_home(car) and car.status != "at_depot":
+        return
+    duty["kind"] = ""
+    duty["until"] = 0
+    duty["stint_s"] = 0.0
+
+
+def _counts_as_work(car: EmpireCar, duty: dict) -> bool:
+    if duty.get("kind"):
+        return False
+    if car.status == "at_depot" and float(car.hold_until) - float(car.leg_started) >= BREAK_S - 1:
+        return False
+    return True
+
+
+def _account_one_duty(car: EmpireCar, now: float, fleet_size: int) -> None:
+    duty = _duty(car)
+    if not duty.get("ready"):
+        index = _sign_index(car.sign) or 1
+        span = max(int(fleet_size), 1)
+        duty["stint_s"] = float((index - 1) % span) * (STINT_S / float(span))
+        duty["day_s"] = 0.0
+        duty["week_s"] = 0.0
+        duty["ready"] = 1
+        duty["at"] = now
+    _roll_duty_calendar(duty, now)
+    _clear_finished_rest(car, duty, now)
+    if not duty.get("kind"):
+        last = float(duty.get("at") or 0)
+        elapsed = 0.0
+        if last > 0 and now >= last:
+            elapsed = min(DUTY_TICK_CAP_S, now - last)
+        if _counts_as_work(car, duty):
+            duty["day_s"] = float(duty.get("day_s") or 0) + elapsed
+            duty["week_s"] = float(duty.get("week_s") or 0) + elapsed
+            duty["stint_s"] = float(duty.get("stint_s") or 0) + elapsed
+    duty["at"] = now
+    _save_duty(car, duty)
+
+
+def _rest_reason(duty: dict) -> str:
+    if float(duty.get("week_s") or 0) >= WORK_WEEK_S:
+        return "week"
+    if float(duty.get("day_s") or 0) >= WORK_DAY_S:
+        return "day"
+    if float(duty.get("stint_s") or 0) >= STINT_S:
+        return "break"
+    return ""
+
+
+def _sit_at_home(car: EmpireCar, now: float) -> None:
+    """Wait out the break at the door. The drive here has already counted."""
+    duty = _duty(car)
+    until = float(duty.get("until") or now)
+    home = _stored_home(car) or car_position(car)
+    car.passenger = ""
+    car.fare_name = ""
+    car.fare_lat = 0.0
+    car.fare_lng = 0.0
+    car.drop_lat = 0.0
+    car.drop_lng = 0.0
+    car.status = "at_depot"
+    car.lat, car.lng = home
+    car.route_json = json.dumps([[home[0], home[1]], [home[0], home[1]]])
+    car.duration_s = 0.0
+    car.leg_started = now
+    car.hold_until = until
+    car.osrm = True
+    car.job = "on break"
+
+
+def _send_home(car: EmpireCar, game: EmpireGame, now: float) -> None:
+    """Drive to the sleep door. Time on this leg is the break, not work."""
+    if _on_passenger_leg(car):
+        return
+    home = _stored_home(car)
+    if home is None:
+        return
+    here = car_position(car)
+    if haversine_km(here, home) <= 0.08:
+        _sit_at_home(car, now)
+        return
+    end = _route_end(car)
+    if car.status == "returning" and end is not None and haversine_km(end, home) <= ROAD_HAIL_KM:
+        return
+    _clear_empty(car)
+    _begin(car, game, here, home, now, "returning")
+    _store_job(car)
+
+
+def _start_rest(car: EmpireCar, game: EmpireGame, now: float, kind: str) -> None:
+    duty = _duty(car)
+    if kind == "week":
+        until = _next_london_monday(now)
+    elif kind == "day":
+        until = _next_london_midnight(now)
+    else:
+        until = now + BREAK_NEED_S
+        kind = "break"
+    duty["kind"] = kind
+    duty["until"] = until
+    _save_duty(car, duty)
+    _release_uncollected(car)
+    _send_home(car, game, now)
+
+
+def _coverage_floor(count: int) -> int:
+    """One taxi stays out of a pair. Two stay out when the fleet is larger. A lone taxi may sleep."""
+    if count <= 1:
+        return 0
+    if count < 3:
+        return 1
+    return MIN_WORKING
+
+
+def _apply_driver_hours(
+    game: EmpireGame,
+    now: float,
+    cars: list[EmpireCar],
+    draw_as: str | None,
+) -> None:
+    """Twelve hours a day, an hour off every four, sixty hours a week.
+
+    The drive home counts as the break. At least two taxis stay out when the fleet has them.
+    """
+    taken: list[tuple[float, float]] = []
+    for car in cars:
+        _ensure_sleep_home(car, game, draw_as, taken)
+        _account_one_duty(car, now, len(cars))
+    owed: list[tuple[float, str, EmpireCar, str]] = []
+    for car in cars:
+        if _hours_resting(car) or _on_passenger_leg(car):
+            continue
+        duty = _duty(car)
+        reason = _rest_reason(duty)
+        if not reason:
+            continue
+        rank = float(duty.get("stint_s") or 0)
+        if reason == "day":
+            rank += 10_000_000
+        elif reason == "week":
+            rank += 20_000_000
+        owed.append((rank, car.sign, car, reason))
+    owed.sort(reverse=True)
+    floor = _coverage_floor(len(cars))
+    for _rank, _sign, car, reason in owed:
+        working = [other for other in cars if not _hours_resting(other)]
+        if len(working) - 1 < floor:
+            break
+        _start_rest(car, game, now, reason)
+    for car in cars:
+        if _hours_resting(car):
+            _send_home(car, game, now)
+
+
 def _travel_to_a_better_spot(
     game: EmpireGame,
     session: Session,
@@ -2201,6 +2532,7 @@ def _travel_to_a_better_spot(
     waiting = [person for person in people if not person.sign]
     claimed = {person.sign: person for person in people if person.sign}
     cars = _fleet_cars(session, fleet_name) if draw_as else _cars(session, game.username)
+    _apply_driver_hours(game, now, cars, draw_as)
     free = sum(1 for car in cars if car.status == "at_depot" and car_may_depart(car))
     taken: list[tuple[float, float]] = [(float(person.lat), float(person.lng)) for person in people]
     for car in cars:
@@ -2215,6 +2547,9 @@ def _travel_to_a_better_spot(
         try:
             if _fault is not None and _fault(car):
                 raise RuntimeError("empire car fault")
+            if _hours_resting(car) and not _on_passenger_leg(car):
+                _send_home(car, game, now)
+                continue
             hunting = car.status == "to_better_spot" and not car.passenger and not car.fare_name
             parked = car.status == "at_depot" and car_may_depart(car) and now >= float(car.hold_until)
             person = claimed.get(car.sign)
@@ -2269,6 +2604,9 @@ def _travel_to_a_better_spot(
         try:
             if _fault is not None and _fault(car):
                 raise RuntimeError("empire car fault")
+            if _hours_resting(car) and not _on_passenger_leg(car):
+                _send_home(car, game, now)
+                continue
             depot = car_depot(car)
             start = car_position(car, depot)
             hail = _nearest_open_hail(start, people, reserved)
@@ -2372,7 +2710,7 @@ def fuel_pence(miles: float) -> int:
 
 
 def new_car_may_leave(paid_pence: int) -> bool:
-    """A new car stays at the depot until 800000 pence is paid."""
+    """A new car stays at the depot until the purchase price is paid."""
     return int(paid_pence) >= NEW_CAR_PENCE
 
 
@@ -2384,7 +2722,7 @@ def car_may_depart(car: EmpireCar) -> bool:
 
 
 def pay_new_car(car: EmpireCar, pence: int) -> bool:
-    """Record the 800000 pence line. A smaller payment does not let the car leave."""
+    """Record the purchase. A smaller payment does not let the car leave."""
     if not new_car_may_leave(pence):
         return False
     if car.depart_offset < 0:
@@ -2393,7 +2731,7 @@ def pay_new_car(car: EmpireCar, pence: int) -> bool:
 
 
 def buy_car(username: str, pence: int, now: float | None = None, session: Session | None = None) -> str | None:
-    """Spend 800000 pence to add T11 when this account's money covers it. A smaller payment adds nothing."""
+    """Spend the purchase price to add T11 when this account's money covers it. A smaller payment adds nothing."""
     if not new_car_may_leave(pence):
         return None
     username = normalise_username(username)
@@ -2446,6 +2784,44 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
         )
         session.commit()
         return bought
+    finally:
+        if own_session:
+            session.close()
+
+
+def sell_car(username: str, sign: str, now: float | None = None, session: Session | None = None) -> bool:
+    """Credit the sale price and remove an owned taxi.
+
+    A passenger job stays. An unpaid car stays. The last two taxis stay.
+    A hail claimed but not collected is released.
+    """
+    username = normalise_username(username)
+    sign = (sign or "").strip()
+    if not sign:
+        return False
+    own_session = session is None
+    if session is None:
+        session = SessionLocal()
+    if now is None:
+        now = time.time()
+    try:
+        game = ensure_game(username, now, session)
+        cars = _cars(session, username)
+        car = next((item for item in cars if item.sign == sign), None)
+        if car is None or car_is_for_sale(car):
+            return False
+        if car.status in ("to_passenger", "with_passenger") or car.passenger or car.fare_name:
+            return False
+        owned = [item for item in cars if not car_is_for_sale(item)]
+        if len(owned) <= 2:
+            return False
+        for person in _people(session, _people_key(username)):
+            if person.sign == car.sign:
+                person.sign = ""
+        game.cash_pence = int(game.cash_pence or 0) + SELL_CAR_PENCE
+        session.delete(car)
+        session.commit()
+        return True
     finally:
         if own_session:
             session.close()
@@ -2712,7 +3088,7 @@ def trip_fields(car: EmpireCar) -> dict[str, str | int]:
         pence = north_tyneside_tariff_pence(miles, seconds)
     else:
         pence = 0
-    if pence == NEW_CAR_PENCE:
+    if pence == NOT_A_FARE_PENCE:
         pence = 0
     return {"pickup": place_name(pickup), "drop": place_name(drop), "trip_pence": int(pence)}
 
@@ -2793,7 +3169,9 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
         car.status = "at_depot"
     _store_job(car)
     route = _loads(car.route_json, [])
-    if len(route) >= 2:
+    if _hours_resting(car):
+        destination = "home"
+    elif len(route) >= 2:
         destination = place_name((float(route[-1][0]), float(route[-1][1])))
     else:
         destination = place_name((float(car.lat), float(car.lng)))
@@ -2801,7 +3179,7 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
     miles = _car_miles(car) + driven_miles(car, now)
     fare = _car_fare(car)
     driver = driver_share_pence(fare)
-    return {
+    row = {
         "sign": car.sign,
         "colour": car.colour,
         "status": car.status,
@@ -2827,6 +3205,10 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
         "driver_share": driver,
         "company_pence": fare - driver,
     }
+    home = _stored_home(car)
+    if home is not None:
+        row["home"] = [home[0], home[1]]
+    return row
 
 
 def _rival_rows(session: Session, username: str, now: float) -> list[dict]:
@@ -2953,6 +3335,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "fuel": lines["fuel"],
             "standing": lines["standing"],
             "new_car": NEW_CAR_PENCE,
+            "sell_car": SELL_CAR_PENCE,
             "for_sale": for_sale_rows(cars),
         }
     finally:

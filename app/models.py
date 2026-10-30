@@ -671,6 +671,7 @@ class EmpireCar(Base):
     journey: Mapped[str] = mapped_column(String(32), default="")
     miles_driven: Mapped[float] = mapped_column(Float, default=0)
     fare_in: Mapped[int] = mapped_column(Integer, default=0)
+    duty_json: Mapped[str] = mapped_column(Text, default="")
 
 
 class EmpirePerson(Base):

@@ -259,6 +259,21 @@ def ensure_empire_car_totals_columns(bind=None) -> None:
             conn.execute(text(f"ALTER TABLE empire_cars ADD COLUMN {name} {wanted[name]}"))
 
 
+def ensure_empire_car_duty_column(bind=None) -> None:
+    """Add the driver-hours record to an existing empire_cars table. Do not wipe rows."""
+    from sqlalchemy import inspect, text
+
+    target = engine if bind is None else bind
+    insp = inspect(target)
+    if "empire_cars" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("empire_cars")}
+    if "duty_json" in cols:
+        return
+    with target.begin() as conn:
+        conn.execute(text("ALTER TABLE empire_cars ADD COLUMN duty_json TEXT NOT NULL DEFAULT ''"))
+
+
 def ensure_empire_firm_columns(bind=None) -> None:
     """Add firm and its depot to an existing empire_cars table. Do not wipe rows."""
     from sqlalchemy import inspect, text
@@ -311,6 +326,7 @@ def init_db() -> None:
         ensure_empire_car_journey_column(engine)
         ensure_empire_firm_columns(engine)
         ensure_empire_car_totals_columns(engine)
+        ensure_empire_car_duty_column(engine)
         ensure_empire_person_drop_columns(engine)
         ensure_empire_person_arrived_column(engine)
         ensure_empire_person_journey_column(engine)

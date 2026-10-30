@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..dependencies import get_current_active_user
-from ..empire import NEW_CAR_PENCE, buy_car, cancel_job, rename_company, set_loiter, snapshot
+from ..empire import NEW_CAR_PENCE, buy_car, cancel_job, rename_company, sell_car, set_loiter, snapshot
 from ..models import User
 
 router = APIRouter()
@@ -15,6 +15,10 @@ router = APIRouter()
 
 class EmpireBuy(BaseModel):
     pence: int
+
+
+class EmpireSell(BaseModel):
+    sign: str
 
 
 class EmpireCancel(BaseModel):
@@ -56,15 +60,26 @@ def empire_buy(
     body: EmpireBuy,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> dict:
-    """Spend 800000 pence to add T11 when the account can afford it. A smaller payment adds nothing."""
+    """Spend the purchase price to add T11 when the account can afford it. A smaller payment adds nothing."""
     sign = buy_car(current_user.username, body.pence)
     if sign is None:
         if int(body.pence) < NEW_CAR_PENCE:
-            detail = "800000 pence buys the next car"
+            detail = f"{NEW_CAR_PENCE} pence buys the next car"
         else:
             detail = "Not enough money for that taxi"
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     return {"sign": sign}
+
+
+@router.post("/v1/empire/sell")
+def empire_sell(
+    body: EmpireSell,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict:
+    """Credit the sale price and remove an owned taxi. A passenger job and the last two stay."""
+    if not sell_car(current_user.username, body.sign):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That taxi cannot be sold")
+    return snapshot(current_user.username)
 
 
 @router.post("/v1/empire/cancel")
