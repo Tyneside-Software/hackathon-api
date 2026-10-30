@@ -1338,8 +1338,9 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertAlmostEqual(michael["cars"][0]["lng"], empire.DEPOT[1], places=4)
         noah_home = (round(noah["cars"][0]["lat"], 5), round(noah["cars"][0]["lng"], 5))
         self.assertNotEqual(noah_home, (round(empire.DEPOT[0], 5), round(empire.DEPOT[1], 5)))
-        houses = {firm["firm"]: firm for firm in michael["firms"]}
+        houses = {firm["firm"]: firm for firm in michael["firms"] if not firm.get("npc")}
         self.assertEqual(set(houses), {"noah", "reeve"})
+        self.assertEqual(len([firm for firm in michael["firms"] if firm.get("npc")]), len(empire.NPC_HOUSES))
         self.assertEqual(len(houses["noah"]["cars"]), 10)
         self.assertEqual(len(houses["reeve"]["cars"]), 10)
         self.assertEqual(houses["noah"]["company"], "North Taxis")
@@ -1354,6 +1355,132 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(seen["michael"], "Monument Cars")
         self.assertEqual(ada["company"], "")
         self.assertEqual([firm["firm"] for firm in ada["firms"]], list(empire.FIRM_NAMES))
+
+    def test_npc_firms_loiter_once_a_day_and_buy_one_taxi_when_they_can_pay(self) -> None:
+        from pydantic import ValidationError
+
+        from app.schemas import UserCreate
+
+        with self.assertRaises(ValidationError):
+            UserCreate(username="*npc-coast", password="password1")
+        self.assertEqual(len(empire.SHARED_HOUSES) + len(empire.NPC_HOUSES), 10)
+        prefixes = [house["prefix"] for house in empire.NPC_HOUSES.values()]
+        self.assertEqual(len(prefixes), len(set(prefixes)))
+        self.assertTrue(set(prefixes).isdisjoint({"T", "N", "S"}))
+        blocked = {
+            (round(point[0], 5), round(point[1], 5))
+            for point in (
+                empire.DEPOT,
+                empire.place_point("Shiremoor"),
+                empire.firm_depots(empire.WORLD)["north"],
+                empire.firm_depots(empire.WORLD)["south"],
+            )
+        }
+        for key in empire.NPC_HOUSES:
+            depot = empire.npc_depot(key)
+            self.assertNotIn((round(depot[0], 5), round(depot[1], 5)), blocked)
+        day = empire._london_local(NOW).date()
+        same = NOW
+        nxt = NOW + 48 * 3600
+        for step in range(1, 72):
+            candidate = NOW + step * 3600
+            if empire._london_local(candidate).date() == day:
+                same = candidate
+            else:
+                nxt = candidate
+                break
+        self.assertEqual(empire.npc_daily_patches(NOW), empire.npc_daily_patches(same))
+        self.assertNotEqual(empire.npc_daily_patches(NOW)["*npc-coast"], empire.npc_daily_patches(nxt)["*npc-coast"])
+        centres = {patch[0] for patch in empire.npc_daily_patches(NOW).values()}
+        self.assertEqual(len(centres), len(empire.NPC_HOUSES))
+        for centre, radius in empire.npc_daily_patches(NOW).values():
+            self.assertTrue(empire.inside_circle(centre))
+            self.assertGreaterEqual(radius, empire.LOITER_MIN_KM)
+            self.assertLessEqual(radius, empire.LOITER_MAX_KM)
+        with self.Session() as session:
+            empire.ensure_game("ada", NOW, session)
+            empire.tick_all(NOW, session)
+            self.assertIsNone(session.get(EmpireGame, "*npc-coast"))
+            for name in ("michael", "noah", "reeve"):
+                empire.ensure_game(name, NOW, session)
+            before = empire.snapshot("michael", NOW, session)
+            solo = empire.snapshot("ada", NOW, session)
+            michael = session.get(EmpireGame, "michael")
+            michael.loiter_firm = ""
+            michael.loiter_lat = 54.971488
+            michael.loiter_lng = -1.615849
+            michael.loiter_km = 3.956
+            session.commit()
+            empire.tick_all(NOW, session)
+            for key, house in empire.NPC_HOUSES.items():
+                game = session.get(EmpireGame, key)
+                cars = empire._cars(session, key)
+                self.assertEqual([car.sign for car in cars], [f"{house['prefix']}1"])
+                self.assertEqual(int(game.cash_pence or 0), 0)
+                centre, radius = empire.npc_daily_patches(NOW)[key]
+                self.assertAlmostEqual(game.loiter_lat, centre[0], places=5)
+                self.assertAlmostEqual(game.loiter_lng, centre[1], places=5)
+                self.assertAlmostEqual(game.loiter_km, radius, places=3)
+                self.assertEqual(game.loiter_firm, "")
+            empire.tick_all(same, session)
+            coast = session.get(EmpireGame, "*npc-coast")
+            held = (coast.loiter_lat, coast.loiter_lng, coast.loiter_km)
+            self.assertEqual([car.sign for car in empire._cars(session, "*npc-coast")], ["W1"])
+            short_now = same + 1
+            cars = empire._cars(session, "*npc-coast")
+            coast.cash_pence = 0
+            coast.fare_in = 0
+            for car in cars:
+                car.miles_driven = 0
+            session.commit()
+            gap = empire.NEW_CAR_PENCE - 1 - empire.account_balance(coast, cars, short_now)
+            coast.cash_pence = int(coast.cash_pence or 0) + gap
+            session.commit()
+            self.assertEqual(empire.account_balance(coast, cars, short_now), empire.NEW_CAR_PENCE - 1)
+            empire.tick_all(short_now, session)
+            self.assertEqual([car.sign for car in empire._cars(session, "*npc-coast")], ["W1"])
+            buy_now = short_now + 1
+            coast = session.get(EmpireGame, "*npc-coast")
+            cars = empire._cars(session, "*npc-coast")
+            bal = empire.account_balance(coast, cars, buy_now)
+            coast.cash_pence = int(coast.cash_pence or 0) + (empire.NEW_CAR_PENCE - bal) + 100_000
+            session.commit()
+            empire.tick_all(buy_now, session)
+            self.assertEqual([car.sign for car in empire._cars(session, "*npc-coast")], ["W1", "W2"])
+            for key, house in empire.NPC_HOUSES.items():
+                if key == "*npc-coast":
+                    continue
+                self.assertEqual(
+                    [car.sign for car in empire._cars(session, key)],
+                    [f"{house['prefix']}1"],
+                )
+            empire.tick_all(nxt, session)
+            coast = session.get(EmpireGame, "*npc-coast")
+            moved = (coast.loiter_lat, coast.loiter_lng, coast.loiter_km)
+            self.assertNotEqual(moved, held)
+            centre, radius = empire.npc_daily_patches(nxt)["*npc-coast"]
+            self.assertAlmostEqual(coast.loiter_lat, centre[0], places=5)
+            self.assertAlmostEqual(coast.loiter_lng, centre[1], places=5)
+            self.assertAlmostEqual(coast.loiter_km, radius, places=3)
+            michael = session.get(EmpireGame, "michael")
+            self.assertAlmostEqual(michael.loiter_lat, 54.971488, places=5)
+            self.assertAlmostEqual(michael.loiter_lng, -1.615849, places=5)
+            self.assertAlmostEqual(michael.loiter_km, 3.956, places=3)
+            self.assertEqual(
+                [car.sign for car in empire._cars(session, "michael")],
+                [f"T{index}" for index in range(1, 11)],
+            )
+        players = [firm for firm in before["firms"] if firm["npc"] is False]
+        npcs = [firm for firm in before["firms"] if firm["npc"] is True]
+        self.assertEqual({firm["firm"] for firm in players}, {"noah", "reeve"})
+        self.assertEqual(len(npcs), len(empire.NPC_HOUSES))
+        self.assertEqual([firm["cars"] for firm in npcs], [[]] * len(npcs))
+        for firm in npcs:
+            self.assertTrue(firm["company"])
+            self.assertTrue(firm["company"].endswith("Taxis") or firm["company"].endswith("Cars"))
+            self.assertRegex(firm["colour"], r"^#[0-9A-Fa-f]{6}$")
+        self.assertEqual([firm["firm"] for firm in solo["firms"]], list(empire.FIRM_NAMES))
+        self.assertTrue(all(not firm.get("npc") for firm in solo["firms"]))
 
     def test_fleet_starts_with_ten_cars_at_the_depot(self) -> None:
         with self.Session() as session:

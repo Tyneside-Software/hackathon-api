@@ -6,6 +6,7 @@ timestamp and never open the live database.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -89,6 +90,18 @@ SHARED_HOUSES = {
     "michael": {"company": "Shiremoor Taxis", "prefix": "T", "depot": "shiremoor"},
     "noah": {"company": "North Taxis", "prefix": "N", "depot": "north"},
     "reeve": {"company": "South Taxis", "prefix": "S", "depot": "south"},
+}
+# Computer firms on the shared map. The star keeps the register form from accepting the name.
+# Ten companies in all: the three houses above, plus these seven.
+# A patch is chosen once per London day. The only other move is to buy one taxi when £500 is covered.
+NPC_HOUSES = {
+    "*npc-coast": {"company": "Coast Taxis", "prefix": "W", "place": "Whitley Bay", "colour": "#22d3ee"},
+    "*npc-airport": {"company": "Airport Taxis", "prefix": "A", "place": "Newcastle Airport", "colour": "#a3e635"},
+    "*npc-station": {"company": "Station Cars", "prefix": "C", "place": "Central Station", "colour": "#c084fc"},
+    "*npc-quay": {"company": "Quay Cars", "prefix": "Q", "place": "the Quayside", "colour": "#818cf8"},
+    "*npc-shields": {"company": "Shields Taxis", "prefix": "H", "place": "North Shields", "colour": "#f97316"},
+    "*npc-cobalt": {"company": "Cobalt Cars", "prefix": "B", "place": "Cobalt", "colour": "#4ade80"},
+    "*npc-city": {"company": "City Taxis", "prefix": "M", "place": "Grey's Monument", "colour": "#2dd4bf"},
 }
 STATUSES = ("at_depot", "to_passenger", "with_passenger", "returning", "to_better_spot")
 JOBS = ("waiting", "travelling to a better spot", "collecting", "carrying", "returning", "on break")
@@ -348,6 +361,13 @@ def ensure_game(username: str, now: float | None = None, session: Session | None
     if now is None:
         now = time.time()
     try:
+        if username in NPC_HOUSES:
+            game = session.get(EmpireGame, username)
+            if game is None:
+                _ensure_npc_houses(session, now)
+                game = session.get(EmpireGame, username)
+                session.commit()
+            return game
         game = session.get(EmpireGame, username)
         if game is None:
             house = SHARED_HOUSES.get(username)
@@ -1404,25 +1424,149 @@ def _add_opening_cars(session: Session, username: str, now: float) -> None:
 
 
 def _ensure_world(session: Session, now: float) -> bool:
-    """One passenger queue for the three houses. This row has no taxis."""
+    """One passenger queue for the shared map. This row has no taxis.
+
+    The seven NPC firms are created here too. An existing fleet, cash balance, and patch stay.
+    """
+    created = False
     world = session.get(EmpireGame, WORLD)
-    if world is not None:
+    if world is None:
+        session.add(
+            EmpireGame(
+                username=WORLD,
+                created_at=str(int(now)),
+                name_index=0,
+                cash_pence=0,
+                fare_in=0,
+                miles_driven=0,
+                firm_bookings="[]",
+                trip_bookings="[]",
+                company_name="",
+            )
+        )
+        session.flush()
+        created = True
+    return _ensure_npc_houses(session, now) or created
+
+
+def npc_depot(username: str) -> tuple[float, float]:
+    """The published place this NPC firm starts from. Not Shiremoor, and not a player depot."""
+    return place_point(NPC_HOUSES[username]["place"])
+
+
+def npc_daily_patches(now: float) -> dict[str, tuple[tuple[float, float], float]]:
+    """One loiter patch per NPC for this London day.
+
+    The published places rotate by the date, and each firm keeps a different town until
+    the next London midnight. The radius is fixed for that firm and that date.
+    Shiremoor stays with the player yard. The same day returns the same patches.
+    """
+    day = _london_local(now).date().isoformat()
+    places = [
+        (name, float(lat), float(lng))
+        for name, lat, lng in PLACES
+        if name != "Shiremoor" and inside_circle((float(lat), float(lng)))
+    ]
+    digest = hashlib.sha256(day.encode()).digest()
+    start = int.from_bytes(digest[:4], "big") % len(places)
+    patches: dict[str, tuple[tuple[float, float], float]] = {}
+    for index, key in enumerate(NPC_HOUSES):
+        _name, lat, lng = places[(start + index) % len(places)]
+        firm = hashlib.sha256(f"{key}|{day}".encode()).digest()
+        unit = int.from_bytes(firm[:2], "big")
+        radius = round(1.5 + (unit / 65535) * 4.5, 3)
+        patches[key] = ((lat, lng), radius)
+    return patches
+
+
+def _ensure_npc_houses(session: Session, now: float) -> bool:
+    """Add any missing NPC firm. Do not hand it the opening ten, and do not touch a player row."""
+    added = False
+    for key, house in NPC_HOUSES.items():
+        game = session.get(EmpireGame, key)
+        if game is None:
+            session.add(
+                EmpireGame(
+                    username=key,
+                    created_at=str(int(now)),
+                    name_index=0,
+                    cash_pence=NEW_CAR_PENCE,
+                    fare_in=0,
+                    miles_driven=0,
+                    firm_bookings="[]",
+                    trip_bookings="[]",
+                    company_name=house["company"],
+                )
+            )
+            added = True
+            continue
+        if not (game.company_name or "").strip():
+            game.company_name = house["company"]
+            added = True
+    if added:
+        session.flush()
+    return added
+
+
+def _npc_refresh_loiter(game: EmpireGame, now: float) -> bool:
+    """Store today's patch. The same London day does not move it."""
+    centre, radius = npc_daily_patches(now)[game.username]
+    same = (
+        (game.loiter_firm or "") == ""
+        and abs(float(game.loiter_lat or 0) - centre[0]) < 1e-9
+        and abs(float(game.loiter_lng or 0) - centre[1]) < 1e-9
+        and abs(float(game.loiter_km or 0) - radius) < 1e-6
+    )
+    if same:
         return False
+    game.loiter_firm = ""
+    game.loiter_lat = centre[0]
+    game.loiter_lng = centre[1]
+    game.loiter_km = radius
+    return True
+
+
+def _npc_buy_one(game: EmpireGame, session: Session, now: float) -> str | None:
+    """Buy one taxi when the balance covers the price. A short balance buys nothing."""
+    cars = _cars(session, game.username)
+    if account_balance(game, cars, now) < NEW_CAR_PENCE:
+        return None
+    house = NPC_HOUSES[game.username]
+    number = 1
+    if cars:
+        number = max(_sign_index(car.sign) for car in cars) + 1
+    if number > 99:
+        return None
+    sign = f"{house['prefix']}{number}"
+    if any(car.sign == sign for car in cars):
+        return None
+    depot = npc_depot(game.username)
+    game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
     session.add(
-        EmpireGame(
-            username=WORLD,
-            created_at=str(int(now)),
-            name_index=0,
-            cash_pence=0,
-            fare_in=0,
-            miles_driven=0,
-            firm_bookings="[]",
-            trip_bookings="[]",
-            company_name="",
+        EmpireCar(
+            username=game.username,
+            sign=sign,
+            colour=house["colour"],
+            status="at_depot",
+            job="waiting",
+            passenger="",
+            lat=depot[0],
+            lng=depot[1],
+            depot_lat=depot[0],
+            depot_lng=depot[1],
+            route_json="[]",
+            duration_s=0,
+            leg_started=now,
+            osrm=False,
+            trail_json="[]",
+            fare_name="",
+            hold_until=now + DEPOT_PAUSE_S,
+            next_check=now + CHECK_S,
+            depart_offset=0,
         )
     )
     session.flush()
-    return True
+    return sign
 
 
 def _remember_company(game: EmpireGame) -> bool:
@@ -2735,7 +2879,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             world = session.get(EmpireGame, WORLD)
             _ensure_waiting_person(world, session, now)
         for game in games:
-            if game.username == WORLD or game.username in SHARED_HOUSES:
+            if game.username == WORLD or game.username in SHARED_HOUSES or game.username in NPC_HOUSES:
                 continue
             ensure_firms(game.username, now, session)
             _ensure_waiting_person(game, session, now)
@@ -2758,10 +2902,23 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             for firm in FIRM_NAMES:
                 _travel_to_a_better_spot(game, session, now, draw_as=firm_key(game.username, firm))
         if shared:
+            npcs: list[EmpireGame] = []
+            for key in NPC_HOUSES:
+                npc = session.get(EmpireGame, key)
+                if npc is None:
+                    continue
+                npcs.append(npc)
+                _npc_refresh_loiter(npc, now)
             for game in shared:
                 for car in _cars(session, game.username):
                     try:
                         advance_car(car, game, now)
+                    except Exception:
+                        log.exception("empire car %s %s failed", car.username, car.sign)
+            for npc in npcs:
+                for car in _cars(session, npc.username):
+                    try:
+                        advance_car(car, npc, now)
                     except Exception:
                         log.exception("empire car %s %s failed", car.username, car.sign)
             world = session.get(EmpireGame, WORLD)
@@ -2771,9 +2928,14 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             rivals: list[EmpireCar] = []
             for game in shared:
                 rivals.extend(_cars(session, game.username))
+            for npc in npcs:
+                rivals.extend(_cars(session, npc.username))
             _claim_closest(people, rivals, taken)
             for game in shared:
                 _travel_to_a_better_spot(game, session, now)
+            for npc in npcs:
+                _travel_to_a_better_spot(npc, session, now)
+                _npc_buy_one(npc, session, now)
         session.commit()
     finally:
         if own_session:
@@ -3315,6 +3477,32 @@ def _rival_rows(session: Session, username: str, now: float) -> list[dict]:
                 "cars": [_public_car(car, now) for car in cars],
                 "bookings": [],
                 "fare_in": int(other_game.fare_in or 0),
+                "npc": False,
+            }
+        )
+    return rows
+
+
+def _npc_rows(session: Session, now: float) -> list[dict]:
+    """The seven computer firms. npc is true so the screen can say they are not players."""
+    rows = []
+    for key, house in NPC_HOUSES.items():
+        game = session.get(EmpireGame, key)
+        if game is None:
+            continue
+        cars = _cars(session, key)
+        home = npc_depot(key)
+        company = (game.company_name or "").strip() or house["company"]
+        rows.append(
+            {
+                "firm": key,
+                "company": company,
+                "depot": [home[0], home[1]],
+                "cars": [_public_car(car, now) for car in cars],
+                "bookings": [],
+                "fare_in": int(game.fare_in or 0),
+                "npc": True,
+                "colour": house["colour"],
             }
         )
     return rows
@@ -3352,6 +3540,9 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
                     continue
                 for car in _cars(session, other):
                     by_sign[car.sign] = car
+            for key in NPC_HOUSES:
+                for car in _cars(session, key):
+                    by_sign[car.sign] = car
         else:
             for firm in FIRM_NAMES:
                 for car in _fleet_cars(session, firm_key(username, firm)):
@@ -3379,7 +3570,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
         cash_pence = 0 if game is None else int(game.cash_pence or 0)
         balance = account_balance(game, cars, now)
         if username in SHARED_HOUSES:
-            firms = _rival_rows(session, username, now)
+            firms = _rival_rows(session, username, now) + _npc_rows(session, now)
         else:
             firms = []
             for firm in FIRM_NAMES:
