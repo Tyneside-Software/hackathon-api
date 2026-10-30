@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session
 
 from .database import SessionLocal, normalise_username
+from .doors import depot_door, named_door, street_address
 from .models import EmpireCar, EmpireGame, EmpirePerson
 
 log = logging.getLogger("hackathon-api")
@@ -580,7 +581,8 @@ SPOTS = (
 )
 # name, origin role, destination role, weights for morning/day/evening/night/small hours,
 # shortest km, longest km, bands that swap the ends, and "half" or "late" when either way is normal.
-# "home" is a street in a town. Every other role is a named building. 800000 is not a weight.
+# "home" is a numbered street in a town. Every other role is a named building.
+# Each end is a first line, a town, and a postcode. 800000 is not a weight.
 # A zero stays zero at that hour. _week_weight raises the kinds that already belong to the day.
 JOURNEY_KINDS = (
     ("commute", "home", "work", (12, 2, 10, 0, 2), 2.0, 26.0, (2,), ""),
@@ -681,6 +683,84 @@ def place_name(point: tuple[float, float]) -> str:
         if (round(lat, 5), round(lng, 5)) == key:
             return name
     return ""
+
+
+def _exact_place_name(point: tuple[float, float]) -> str:
+    """A published pin only. The depot radius is not a building."""
+    key = (round(float(point[0]), 5), round(float(point[1]), 5))
+    for name, lat, lng in PLACES:
+        if (round(lat, 5), round(lng, 5)) == key:
+            return name
+    for name, lat, lng, _roles in SPOTS:
+        if (round(lat, 5), round(lng, 5)) == key:
+            return name
+    return ""
+
+
+def _nearest_settlement(point: tuple[float, float]) -> str:
+    best = SETTLEMENTS[0][0]
+    best_km = haversine_km(point, (SETTLEMENTS[0][1], SETTLEMENTS[0][2]))
+    for name, lat, lng, _pop, _spread in SETTLEMENTS[1:]:
+        distance = haversine_km(point, (lat, lng))
+        if distance < best_km:
+            best = name
+            best_km = distance
+    return best
+
+
+def postal_address(point: tuple[float, float]) -> dict[str, str]:
+    """First line, town, and postcode for this point.
+
+    A published building keeps that door. The yard is the Shiremoor depot.
+    Anything else is a numbered street in the nearest town. (0, 0) is unset.
+    """
+    lat = float(point[0])
+    lng = float(point[1])
+    if lat == 0.0 and lng == 0.0:
+        return {"line": "", "city": "", "postcode": ""}
+    name = _exact_place_name((lat, lng))
+    if name:
+        door = named_door(name)
+        if door is not None:
+            return door
+    if haversine_km((lat, lng), DEPOT) <= 0.08:
+        return depot_door()
+    return street_address(_nearest_settlement((lat, lng)), lat, lng)
+
+
+def _filled_door(point: tuple[float, float] | None) -> dict[str, str]:
+    """A complete door. An unset point uses the yard, so the panel is never blank."""
+    if point is None or (float(point[0]) == 0.0 and float(point[1]) == 0.0):
+        return postal_address(DEPOT)
+    door = postal_address(point)
+    if not door["line"] or not door["city"] or not door["postcode"]:
+        return postal_address(DEPOT)
+    return door
+
+
+def _car_doors(car: EmpireCar) -> tuple[dict[str, str], dict[str, str]]:
+    """Origin and destination for the journey this car is on, or the leg it is driving.
+
+    A passenger job uses the hail and the drop. A rest uses the sleep door.
+    A parked car is here, at one door.
+    """
+    ends = _passenger_ends(car)
+    if ends is not None:
+        return _filled_door(ends[0]), _filled_door(ends[1])
+    route = _loads(car.route_json, [])
+    if _hours_resting(car):
+        home = _stored_home(car)
+        start = (float(route[0][0]), float(route[0][1])) if route else (float(car.lat), float(car.lng))
+        return _filled_door(start), _filled_door(home if home is not None else car_depot(car))
+    if len(route) >= 2:
+        start = (float(route[0][0]), float(route[0][1]))
+        end = (float(route[-1][0]), float(route[-1][1]))
+        return _filled_door(start), _filled_door(end)
+    here = (float(car.lat), float(car.lng))
+    if here == (0.0, 0.0):
+        here = car_depot(car)
+    door = _filled_door(here)
+    return door, door
 
 
 def _last_sunday(year: int, month: int) -> datetime:
@@ -1095,7 +1175,8 @@ def draw_journey(username: str, now: float, salt: str) -> tuple[str, tuple[float
 
     The hour changes which kinds are busy, and the day raises the ones that belong to it.
     A commute in the evening runs back home. An airport, hotel, or ferry trip runs either way.
-    A home is a street in a likely town. A station, hospital, hotel, or workplace stays on that building.
+    A home is a numbered street in a likely town. A station, hospital, hotel, or workplace stays on that building.
+    postal_address turns either end into a first line, a town, and a postcode.
     """
     rng = random.Random(_engine_seed(username, f"{_spell_key(now)}|{salt}|journey"))
     local = _london_local(now)
@@ -3176,6 +3257,7 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
     else:
         destination = place_name((float(car.lat), float(car.lng)))
     trip = trip_fields(car)
+    origin, dest = _car_doors(car)
     miles = _car_miles(car) + driven_miles(car, now)
     fare = _car_fare(car)
     driver = driver_share_pence(fare)
@@ -3196,6 +3278,8 @@ def _public_car(car: EmpireCar, now: float = 0) -> dict:
         "seconds_left": leg_seconds_left(car, now),
         "pickup": trip["pickup"],
         "drop": trip["drop"],
+        "origin": origin,
+        "dest": dest,
         "trip_pence": trip["trip_pence"],
         "journey": (car.journey or "") if car.status == "with_passenger" else "",
         "for_sale": car_is_for_sale(car),

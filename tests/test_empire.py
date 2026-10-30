@@ -6304,5 +6304,147 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(refused.json()["detail"], "That taxi cannot be sold")
         self.assertIn("T1", [car["sign"] for car in later["cars"]])
 
+    def _assert_full_door(self, door: dict, where: str) -> None:
+        import re
+
+        pattern = re.compile(r"^[A-Z]{1,2}[0-9][0-9A-Z]? [0-9][ABD-HJLNP-UW-Z]{2}$")
+        self.assertEqual(set(door), {"line", "city", "postcode"}, where)
+        self.assertTrue(str(door["line"]).strip(), where)
+        self.assertTrue(str(door["city"]).strip(), where)
+        self.assertRegex(door["postcode"], pattern, where)
+        self.assertNotEqual(door["line"].strip(), door["city"].strip(), where)
+        self.assertNotIn(door["postcode"], door["line"], where)
+
+    def test_every_place_and_every_town_has_a_full_door(self) -> None:
+        from app import doors as taxi_doors
+
+        towns = {name for name, _lat, _lng, _pop, _spread in empire.SETTLEMENTS}
+        self.assertEqual(set(taxi_doors.STREETS), towns)
+        names = [name for name, _lat, _lng in empire.PLACES]
+        names.extend(name for name, _lat, _lng, _roles in empire.SPOTS)
+        self.assertEqual(set(taxi_doors.NAMED), set(names))
+        for line, city, postcode in taxi_doors.NAMED.values():
+            self._assert_full_door({"line": line, "city": city, "postcode": postcode}, line)
+        for town, (city, streets) in taxi_doors.STREETS.items():
+            self.assertTrue(city.strip(), town)
+            self.assertGreaterEqual(len(streets), 3, town)
+            for street, postcode in streets:
+                self._assert_full_door(
+                    {"line": f"14 {street}", "city": city, "postcode": postcode},
+                    f"{town} {street}",
+                )
+        for name, lat, lng in empire.PLACES:
+            door = empire.postal_address((lat, lng))
+            self._assert_full_door(door, name)
+            self.assertEqual(door, taxi_doors.named_door(name), name)
+        for name, lat, lng, _roles in empire.SPOTS:
+            door = empire.postal_address((lat, lng))
+            self._assert_full_door(door, name)
+            self.assertEqual(door, taxi_doors.named_door(name), name)
+        yard = empire.postal_address(empire.DEPOT)
+        self._assert_full_door(yard, "depot")
+        self.assertEqual(yard["line"], "42 Earsdon Road")
+        self.assertNotEqual(yard, empire.postal_address(empire.place_point("Shiremoor")))
+        self.assertEqual(empire.postal_address((0.0, 0.0))["line"], "")
+        self.assertEqual(empire.place_name((0.0, 0.0)), "")
+        self.assertEqual(empire.place_name(empire.place_point("Benton")), "Benton")
+        for name, lat, lng, _pop, _spread in empire.SETTLEMENTS:
+            point = empire._offset_km(lat, lng, 0.35, 0.22)
+            if empire._exact_place_name(point):
+                point = empire._offset_km(lat, lng, 0.48, -0.18)
+            door = empire.postal_address(point)
+            again = empire.postal_address(point)
+            self._assert_full_door(door, name)
+            self.assertEqual(again, door, name)
+            self.assertRegex(door["line"], r"^\d{1,3} ", name)
+        gosforth = empire._offset_km(55.007, -1.620, 0.25, 0.12)
+        self.assertEqual(empire.postal_address(gosforth)["city"], "Gosforth")
+        self.assertTrue(empire.postal_address(gosforth)["postcode"].startswith("NE3 "))
+
+    def test_drawn_journeys_always_have_two_full_doors(self) -> None:
+        for index in range(36):
+            _kind, pickup, drop = empire.draw_journey("doors", NOW, f"addr-{index}")
+            for end in (pickup, drop):
+                door = empire.postal_address(end)
+                self._assert_full_door(door, f"addr-{index}")
+                if empire.place_name(end) == "":
+                    self.assertRegex(door["line"], r"^\d{1,3} ")
+        for username in ("ada", "bee", "cy"):
+            for ends in (
+                empire.morning_ends(username),
+                empire.day_ends(username),
+                empire.evening_ends(username),
+                empire.night_ends(username),
+                empire.journey_ends(username),
+                empire.airport_ends(username),
+            ):
+                for end in ends:
+                    self._assert_full_door(empire.postal_address(end), username)
+
+    def test_the_feed_sends_a_door_for_every_taxi(self) -> None:
+        with self.Session() as session:
+            empire.ensure_game("doorsfeed", NOW, session)
+            parked = empire.snapshot("doorsfeed", NOW, session)
+            car = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "doorsfeed", EmpireCar.sign == "T1")
+            ).one()
+            cobalt = empire.place_point("Cobalt")
+            station = empire.place_point("Central Station")
+            car.status = "with_passenger"
+            car.passenger = "Mina"
+            car.fare_name = "Mina"
+            car.fare_lat, car.fare_lng = cobalt
+            car.drop_lat, car.drop_lng = station
+            car.route_json = json.dumps([[cobalt[0], cobalt[1]], [station[0], station[1]]])
+            car.journey = "commute"
+            session.commit()
+            carrying = empire.snapshot("doorsfeed", NOW, session)
+            home = empire._offset_km(55.007, -1.620, 0.28, -0.16)
+            asleep = session.scalars(
+                select(EmpireCar).where(EmpireCar.username == "doorsfeed", EmpireCar.sign == "T2")
+            ).one()
+            empire._save_duty(
+                asleep,
+                {
+                    "day": empire._london_local(NOW).date().isoformat(),
+                    "week": empire._week_key(NOW),
+                    "day_s": 0,
+                    "week_s": 0,
+                    "stint_s": 0,
+                    "until": NOW + 3600,
+                    "kind": "break",
+                    "home_lat": home[0],
+                    "home_lng": home[1],
+                    "at": NOW,
+                    "ready": 1,
+                },
+            )
+            asleep.status = "at_depot"
+            asleep.route_json = "[]"
+            session.commit()
+            resting = empire.snapshot("doorsfeed", NOW, session)
+        for row in parked["cars"]:
+            self._assert_full_door(row["origin"], row["sign"])
+            self._assert_full_door(row["dest"], row["sign"])
+            self.assertEqual(row["origin"], row["dest"], row["sign"])
+            self.assertEqual(row["pickup"], "")
+            self.assertEqual(row["drop"], "")
+        taken = next(row for row in carrying["cars"] if row["sign"] == "T1")
+        self.assertEqual(taken["origin"]["line"], "Cobalt Business Park")
+        self.assertEqual(taken["origin"]["city"], "Newcastle upon Tyne")
+        self.assertEqual(taken["origin"]["postcode"], "NE27 0QJ")
+        self.assertEqual(taken["dest"]["line"], "Newcastle Central Station")
+        self.assertEqual(taken["dest"]["city"], "Newcastle upon Tyne")
+        self.assertEqual(taken["dest"]["postcode"], "NE1 5DL")
+        self.assertEqual(taken["pickup"], "Cobalt")
+        self.assertEqual(taken["drop"], "Central Station")
+        sleeper = next(row for row in resting["cars"] if row["sign"] == "T2")
+        self.assertEqual(sleeper["destination"], "home")
+        self.assertEqual(sleeper["dest"]["city"], "Gosforth")
+        self.assertRegex(sleeper["dest"]["line"], r"^\d{1,3} ")
+        self.assertTrue(sleeper["dest"]["postcode"].startswith("NE3 "))
+        self._assert_full_door(sleeper["origin"], "sleep origin")
+        self.assertNotEqual(sleeper["origin"], sleeper["dest"])
+
 if __name__ == "__main__":
     unittest.main()
