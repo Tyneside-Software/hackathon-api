@@ -4454,6 +4454,44 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["cash_pence"], 0)
         self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
 
+    def test_a_loiter_drive_is_not_restarted_on_the_next_tick(self) -> None:
+        centre, radius = _empty_patch()
+        account = "loiterkeep"
+        with self.Session() as session:
+            empire.ensure_game(account, NOW, session)
+            self.assertTrue(empire.set_loiter(account, centre[0], centre[1], radius, "", NOW, session))
+            empire.tick_all(NOW + 70, session)
+            begun = {}
+            places = {}
+            routes = {}
+            for car in session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all():
+                if car.status != "to_better_spot" or car.passenger or car.fare_name:
+                    continue
+                route = empire._loads(car.route_json, [])
+                self.assertGreaterEqual(len(route), 2, car.sign)
+                end = (float(route[-1][0]), float(route[-1][1]))
+                self.assertLessEqual(
+                    empire.haversine_km(centre, end),
+                    radius + empire.ROAD_HAIL_KM,
+                    car.sign,
+                )
+                begun[car.sign] = float(car.leg_started)
+                places[car.sign] = (float(car.lat), float(car.lng))
+                routes[car.sign] = car.route_json
+            self.assertGreaterEqual(len(begun), 1)
+            empire.tick_all(NOW + 110, session)
+            for sign, started in begun.items():
+                car = session.scalars(
+                    select(EmpireCar).where(EmpireCar.username == account, EmpireCar.sign == sign)
+                ).one()
+                self.assertEqual(car.status, "to_better_spot", sign)
+                self.assertEqual(car.passenger, "", sign)
+                self.assertEqual(float(car.leg_started), started, sign)
+                self.assertEqual(car.route_json, routes[sign], sign)
+                moved = empire.haversine_km(places[sign], (float(car.lat), float(car.lng)))
+                self.assertGreater(moved, 0.02, sign)
+        self.assertNotEqual(Path(TEMP_DB).resolve(), (ROOT / "hackathon.db").resolve())
+
     def test_a_north_patch_does_not_move_the_players_cars(self) -> None:
         quiet = datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp()
         centre, radius = _empty_patch()

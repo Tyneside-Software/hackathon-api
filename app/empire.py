@@ -1983,6 +1983,18 @@ def _near_hail(point: tuple[float, float], person: EmpirePerson) -> bool:
     return haversine_km(point, _hail_point(person)) <= ROAD_HAIL_KM
 
 
+def _far_leg_may_continue(car: EmpireCar, game: EmpireGame, end: tuple[float, float]) -> bool:
+    """A hunt, or a drive into the loiter patch, may be longer than two miles."""
+    if _leg_follows_a_hail(car, end):
+        return True
+    draw_as = car.username if (car.firm or "") else None
+    patch = loiter_for_fleet(game, draw_as)
+    if patch is None:
+        return False
+    centre, radius = patch
+    return haversine_km(end, centre) <= radius + ROAD_HAIL_KM
+
+
 def _leg_follows_a_hail(car: EmpireCar, end: tuple[float, float]) -> bool:
     """True when this empty leg is the drive toward a hail this taxi may still take.
 
@@ -2069,7 +2081,7 @@ def advance_car(car: EmpireCar, game: EmpireGame, now: float) -> None:
         if len(route) >= 2:
             here = (float(car.lat), float(car.lng))
             end = (float(route[-1][0]), float(route[-1][1]))
-            if haversine_km(here, end) > EMPTY_MOVE_KM and not _leg_follows_a_hail(car, end):
+            if haversine_km(here, end) > EMPTY_MOVE_KM and not _far_leg_may_continue(car, game, end):
                 _stop_far_empty_leg(car, now)
                 _store_job(car)
                 _check_in(car, now)
@@ -2231,6 +2243,11 @@ def _travel_to_a_better_spot(
                         _store_job(car)
                     taken.append(start)
                     continue
+                if hunting:
+                    end = _route_end(car)
+                    if end is not None and haversine_km(end, centre) <= radius + ROAD_HAIL_KM:
+                        taken.append(end)
+                        continue
                 spot = loiter_spot(fleet_name, car.sign, now, centre, radius, tuple(taken))
                 if not _inside_loiter(spot, centre, radius) or _point_taken(spot, tuple(taken)):
                     continue
