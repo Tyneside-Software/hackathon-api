@@ -1580,11 +1580,9 @@ def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
     """Each waiting person is claimed by the closest free taxi. A car on a leg is left alone.
 
     People left over do not add a car. Two people do not claim the same taxi.
-    A loiter order keeps this fleet in the patch, so these cars do not take a hail.
+    A loiter patch does not keep a free taxi off a hail.
     The app session does not autoflush, so this reads the cars already in memory.
     """
-    if loiter_for_fleet(game, None) is not None:
-        return
     people = _people(session, game.username)
     taken = {person.sign for person in people if person.sign}
     _claim_closest(people, _cars(session, game.username), taken)
@@ -1600,8 +1598,6 @@ def _allocate_firm_leftovers(game: EmpireGame, session: Session) -> None:
     firm_cars: list[EmpireCar] = []
     for firm in FIRM_NAMES:
         key = firm_key(game.username, firm)
-        if loiter_for_fleet(game, key) is not None:
-            continue
         firm_cars.extend(_fleet_cars(session, key))
     _claim_closest(people, firm_cars, taken)
     session.flush()
@@ -2192,9 +2188,9 @@ def _travel_to_a_better_spot(
 ) -> None:
     """Claimed taxis collect. Idle taxis drive toward a hail they can see.
 
-    A loiter order comes before the hunt. Two idle taxis in one fleet do not hunt the same hail.
+    A loiter order waits until no hail is left. Two idle taxis in one fleet do not hunt the same hail.
     The claim itself still waits until the car is within ten minutes.
-    When no hail is left, a taxi may take a break or move to a place within two miles.
+    When no hail is left, a taxi may drive to its patch, take a break, or move within two miles.
     The depot is for a break. 800000 is not a fare.
     Another firm passes its own draw seed. The player's seed stays the bare username.
     A bought car takes one fare inside the circle when its four-second purchase pause ends.
@@ -2202,6 +2198,7 @@ def _travel_to_a_better_spot(
     fleet_name = draw_as or game.username
     patch = loiter_for_fleet(game, draw_as)
     people = _people(session, _people_key(game.username))
+    waiting = [person for person in people if not person.sign]
     claimed = {person.sign: person for person in people if person.sign}
     cars = _fleet_cars(session, fleet_name) if draw_as else _cars(session, game.username)
     free = sum(1 for car in cars if car.status == "at_depot" and car_may_depart(car))
@@ -2231,7 +2228,7 @@ def _travel_to_a_better_spot(
                 continue
             depot = car_depot(car)
             start = car_position(car, depot)
-            if patch is not None:
+            if patch is not None and not waiting:
                 centre, radius = patch
                 if _inside_loiter(start, centre, radius) and not _point_taken(start, tuple(taken)):
                     if hunting:
@@ -2354,8 +2351,6 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             taken = {person.sign for person in people if person.sign}
             rivals: list[EmpireCar] = []
             for game in shared:
-                if loiter_for_fleet(game, None) is not None:
-                    continue
                 rivals.extend(_cars(session, game.username))
             _claim_closest(people, rivals, taken)
             for game in shared:

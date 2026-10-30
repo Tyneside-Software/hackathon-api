@@ -88,7 +88,7 @@ def _empty_patch() -> tuple[tuple[float, float], float]:
 
 
 def _quiet_account(prefix: str, stamp: float) -> str:
-    """A quiet hour still has hails. A loiter order is what keeps the taxis in the patch."""
+    """A quiet hour still has hails. The account name stays stable for the seed."""
     return f"{prefix}0"
 
 
@@ -4340,7 +4340,7 @@ class EmpireFleetTests(unittest.TestCase):
         after = live.stat().st_mtime if live.exists() else None
         self.assertEqual(before, after)
 
-    def test_idle_taxis_of_that_firm_loiter_inside_the_patch(self) -> None:
+    def test_a_saved_patch_does_not_leave_taxis_waiting_while_hails_are_up(self) -> None:
         quiet = datetime(2023, 11, 15, 3, 0, tzinfo=timezone.utc).timestamp()
         centre, radius = _empty_patch()
         account = _quiet_account("patch", quiet + 64)
@@ -4384,19 +4384,19 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertNotIn("T11", [car["sign"] for car in body["cars"]])
         self.assertEqual(len(body["people"]), empire.spell_target(account, quiet + 64))
         self.assertEqual(len(cars), 10)
-        ends = []
-        for car in cars:
-            self.assertEqual(car.status, "to_better_spot", car.sign)
-            self.assertEqual(car.passenger, "")
-            self.assertEqual(car.fare_name, "")
-            route = empire._loads(car.route_json, [])
-            end = (route[-1][0], route[-1][1])
-            self.assertLessEqual(empire.haversine_km(centre, end), radius, car.sign)
-            self.assertTrue(empire.inside_circle(end))
-            self.assertNotEqual(end, empire.DEPOT)
-            ends.append((round(end[0], 5), round(end[1], 5)))
-        self.assertEqual(len(ends), len(set(ends)))
         hail_keys = {(round(person["lat"], 5), round(person["lng"], 5)) for person in body["people"]}
+        claimed = {person["sign"] for person in body["people"] if person["sign"]}
+        self.assertTrue(claimed)
+        for car in cars:
+            self.assertNotEqual(car.status, "at_depot", car.sign)
+            self.assertNotEqual(car.job, "waiting", car.sign)
+            self.assertIn(car.status, ("to_passenger", "with_passenger", "to_better_spot"), car.sign)
+            route = empire._loads(car.route_json, [])
+            if car.status != "to_better_spot" or len(route) < 2:
+                continue
+            end = (float(route[-1][0]), float(route[-1][1]))
+            if empire.haversine_km(centre, end) <= radius:
+                self.assertIn((round(end[0], 5), round(end[1], 5)), hail_keys, car.sign)
         for car in north:
             route = empire._loads(car.route_json, [])
             if len(route) < 2:
@@ -4439,16 +4439,12 @@ class EmpireFleetTests(unittest.TestCase):
             idle = [
                 car
                 for car in session.scalars(select(EmpireCar).where(EmpireCar.username == account)).all()
-                if car.sign not in kept and car.status == "to_better_spot"
+                if car.sign not in kept
             ]
         self.assertGreaterEqual(len(idle), 2)
-        ends = []
         for car in idle:
-            route = empire._loads(car.route_json, [])
-            end = (route[-1][0], route[-1][1])
-            self.assertLessEqual(empire.haversine_km(centre, end), radius, car.sign)
-            ends.append((round(end[0], 5), round(end[1], 5)))
-        self.assertEqual(len(ends), len(set(ends)))
+            self.assertNotEqual(car.status, "at_depot", car.sign)
+            self.assertNotEqual(car.job, "waiting", car.sign)
         self.assertEqual(len(body["cars"]), 10)
         self.assertEqual(body["fare_in"], 0)
         self.assertEqual(body["cash_pence"], 0)
@@ -4457,6 +4453,14 @@ class EmpireFleetTests(unittest.TestCase):
     def test_a_loiter_drive_is_not_restarted_on_the_next_tick(self) -> None:
         centre, radius = _empty_patch()
         account = "loiterkeep"
+        original = empire.spell_target
+        empire.spell_target = lambda username, now: 0
+        try:
+            self._loiter_drive_holds(centre, radius, account)
+        finally:
+            empire.spell_target = original
+
+    def _loiter_drive_holds(self, centre, radius, account) -> None:
         with self.Session() as session:
             empire.ensure_game(account, NOW, session)
             self.assertTrue(empire.set_loiter(account, centre[0], centre[1], radius, "", NOW, session))
@@ -4518,16 +4522,11 @@ class EmpireFleetTests(unittest.TestCase):
         self.assertEqual(body["fare_in"], 0)
         self.assertEqual(len(body["cars"]), 10)
         self.assertEqual(len(north), 10)
-        north_ends = []
-        for car in north:
-            self.assertEqual(car.status, "to_better_spot", car.sign)
-            route = empire._loads(car.route_json, [])
-            end = (route[-1][0], route[-1][1])
-            self.assertLessEqual(empire.haversine_km(centre, end), radius, car.sign)
-            north_ends.append((round(end[0], 5), round(end[1], 5)))
-        self.assertEqual(len(north_ends), len(set(north_ends)))
         hail_keys = {(round(person["lat"], 5), round(person["lng"], 5)) for person in body["people"]}
-        for car in player + south:
+        for car in north:
+            self.assertNotEqual(car.status, "at_depot", car.sign)
+            self.assertNotEqual(car.job, "waiting", car.sign)
+        for car in player + south + north:
             route = empire._loads(car.route_json, [])
             if len(route) < 2:
                 point = (float(car.lat), float(car.lng))
@@ -4544,6 +4543,14 @@ class EmpireFleetTests(unittest.TestCase):
         sat = empire.destination(centre, 15, 0.1)
         self.assertLessEqual(empire.haversine_km(centre, sat), radius)
         stamp = quiet + 64
+        original = empire.spell_target
+        empire.spell_target = lambda username, now: 0
+        try:
+            self._two_idle_taxis_keep_separate_points(account, centre, radius, sat, quiet, stamp)
+        finally:
+            empire.spell_target = original
+
+    def _two_idle_taxis_keep_separate_points(self, account, centre, radius, sat, quiet, stamp) -> None:
         with self.Session() as session:
             empire.ensure_game(account, quiet, session)
             self.assertTrue(empire.set_loiter(account, centre[0], centre[1], radius, "", quiet, session))
