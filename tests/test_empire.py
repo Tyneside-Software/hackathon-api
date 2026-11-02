@@ -6236,6 +6236,62 @@ class EmpireFleetTests(unittest.TestCase):
             self.assertEqual(len(asleep["home"]), 2)
             self.assertNotEqual(awake["destination"], "home")
 
+    def test_player_coverage_keeps_two_and_a_lone_npc_may_sleep(self) -> None:
+        self.assertEqual(empire._coverage_floor(10, "michael"), 2)
+        self.assertEqual(empire._coverage_floor(2, "noah"), 2)
+        self.assertEqual(empire._coverage_floor(1, "reeve"), 1)
+        self.assertEqual(empire._coverage_floor(1, "*npc-coast"), 0)
+        self.assertEqual(empire._coverage_floor(2, "*npc-coast"), 1)
+        self.assertEqual(empire._coverage_floor(10, "*npc-city"), 2)
+
+    def test_a_pair_of_player_taxis_both_stay_off_break(self) -> None:
+        with self.Session() as session:
+            game = empire.ensure_game("paircover", NOW, session)
+            for car in empire._cars(session, "paircover"):
+                if car.sign not in ("T1", "T2"):
+                    session.delete(car)
+            session.commit()
+            kept = empire._cars(session, "paircover")
+            for car in kept:
+                self._stamp_duty(car, NOW, stint=empire.STINT_S + 10)
+            session.commit()
+            empire._apply_driver_hours(game, NOW, kept, None)
+            kept = empire._cars(session, "paircover")
+            self.assertEqual({car.sign for car in kept}, {"T1", "T2"})
+            self.assertTrue(all(not empire._hours_resting(car) for car in kept))
+            self.assertTrue(all(empire.current_job(car) != "on break" for car in kept))
+
+    def test_a_lone_player_taxi_does_not_go_on_break(self) -> None:
+        with self.Session() as session:
+            game = empire.ensure_game("lonecover", NOW, session)
+            for car in empire._cars(session, "lonecover"):
+                if car.sign != "T1":
+                    session.delete(car)
+            session.commit()
+            kept = empire._cars(session, "lonecover")
+            self._stamp_duty(kept[0], NOW, stint=empire.STINT_S + 10)
+            session.commit()
+            empire._apply_driver_hours(game, NOW, kept, None)
+            car = empire._cars(session, "lonecover")[0]
+            self.assertEqual(car.sign, "T1")
+            self.assertFalse(empire._hours_resting(car))
+            self.assertNotEqual(empire.current_job(car), "on break")
+
+    def test_an_idle_player_firm_keeps_two_taxis_off_break(self) -> None:
+        original = empire.car_takes_a_break
+        empire.car_takes_a_break = lambda *_args, **_kwargs: True
+        try:
+            with self.Session() as session:
+                game = empire.ensure_game("idlecover", NOW, session)
+                empire._travel_to_a_better_spot(game, session, NOW + 100)
+                cars = empire._cars(session, "idlecover")
+                off = [car for car in cars if empire.current_job(car) != "on break"]
+                self.assertEqual(len(cars), 10)
+                self.assertGreaterEqual(len(off), 2)
+                self.assertLess(len(off), len(cars))
+        finally:
+            empire.car_takes_a_break = original
+
     def test_a_carrying_taxi_finishes_the_job_before_sleeping(self) -> None:
         with self.Session() as session:
             game = empire.ensure_game("sleepfare", NOW, session)

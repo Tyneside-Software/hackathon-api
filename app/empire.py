@@ -1801,10 +1801,11 @@ def _should_break(car: EmpireCar, now: float) -> bool:
     people = _people(session, _people_key(car.username))
     if any(person.sign == car.sign for person in people):
         return False
-    free = sum(
-        1 for other in _fleet_cars(session, car.username) if other.status == "at_depot" and car_may_depart(other)
-    )
-    return car_takes_a_break(car.username, car.sign, now, len(people), free)
+    fleet = _fleet_cars(session, car.username)
+    free = sum(1 for other in fleet if other.status == "at_depot" and car_may_depart(other))
+    if not car_takes_a_break(car.username, car.sign, now, len(people), free):
+        return False
+    return _may_start_break(fleet, car)
 
 
 def _sit_on_break(car: EmpireCar, now: float, depot: tuple[float, float]) -> None:
@@ -2785,13 +2786,42 @@ def _start_rest(car: EmpireCar, game: EmpireGame, now: float, kind: str) -> None
     _send_home(car, game, now)
 
 
-def _coverage_floor(count: int) -> int:
-    """One taxi stays out of a pair. Two stay out when the fleet is larger. A lone taxi may sleep."""
+def _is_player_fleet(username: str) -> bool:
+    """A person runs this firm. NPC houses and the shared queue do not."""
+    account = _account_of(username)
+    return bool(account) and account not in NPC_HOUSES and account != WORLD
+
+
+def _coverage_floor(count: int, username: str = "") -> int:
+    """A player firm keeps two taxis off a break. A smaller firm keeps every taxi out.
+
+    An NPC firm still lets a lone taxi sleep, and a pair keeps one out.
+    """
+    if _is_player_fleet(username):
+        return min(MIN_WORKING, max(int(count), 0))
     if count <= 1:
         return 0
     if count < 3:
         return 1
     return MIN_WORKING
+
+
+def _out_for_cover(car: EmpireCar, username: str) -> bool:
+    """True when this taxi still counts toward the taxis a firm must keep out."""
+    if _is_player_fleet(username):
+        return current_job(car) != "on break"
+    return not _hours_resting(car)
+
+
+def _may_start_break(cars: list[EmpireCar], car: EmpireCar) -> bool:
+    """A player firm does not start a break that would leave fewer than two taxis out."""
+    if not _is_player_fleet(car.username):
+        return True
+    floor = _coverage_floor(len(cars), car.username)
+    off = sum(1 for other in cars if current_job(other) != "on break")
+    if current_job(car) != "on break":
+        off -= 1
+    return off >= floor
 
 
 def _apply_driver_hours(
@@ -2802,7 +2832,8 @@ def _apply_driver_hours(
 ) -> None:
     """Twelve hours a day, an hour off every four, sixty hours a week.
 
-    The drive home counts as the break. At least two taxis stay out when the fleet has them.
+    The drive home counts as the break. A player firm keeps two taxis off a break.
+    A firm of one or two keeps every taxi out. An NPC firm still lets a lone taxi sleep.
     """
     taken: list[tuple[float, float]] = []
     for car in cars:
@@ -2823,9 +2854,10 @@ def _apply_driver_hours(
             rank += 20_000_000
         owed.append((rank, car.sign, car, reason))
     owed.sort(reverse=True)
-    floor = _coverage_floor(len(cars))
+    fleet_name = cars[0].username if cars else ""
+    floor = _coverage_floor(len(cars), fleet_name)
     for _rank, _sign, car, reason in owed:
-        working = [other for other in cars if not _hours_resting(other)]
+        working = [other for other in cars if _out_for_cover(other, fleet_name)]
         if len(working) - 1 < floor:
             break
         _start_rest(car, game, now, reason)
@@ -2845,6 +2877,7 @@ def _travel_to_a_better_spot(
     A loiter order waits until no hail is left. Two idle taxis in one fleet do not hunt the same hail.
     The claim itself still waits until the car is within ten minutes.
     When no hail is left, a taxi may drive to its patch, take a break, or move within two miles.
+    A player firm still keeps two taxis off that break. A smaller firm does not sit at all.
     The depot is for a break. 800000 is not a fare.
     Another firm passes its own draw seed. The player's seed stays the bare username.
     A bought car takes one fare inside the circle when its four-second purchase pause ends.
@@ -2942,7 +2975,7 @@ def _travel_to_a_better_spot(
                     _stop_far_empty_leg(car, now)
                     _store_job(car)
                 continue
-            if car_takes_a_break(fleet_name, car.sign, now, len(people), free):
+            if car_takes_a_break(fleet_name, car.sign, now, len(people), free) and _may_start_break(cars, car):
                 if haversine_km(start, depot) > 0.05:
                     _clear_empty(car)
                     _begin(car, game, start, depot, now, "returning")
