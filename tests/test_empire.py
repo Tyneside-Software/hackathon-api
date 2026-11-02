@@ -832,10 +832,11 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(bought.status_code, 200)
         self.assertEqual(bought.json()["sign"], "T11")
         self.assertEqual(again.status_code, 200)
-        self.assertEqual(again.json()["sign"], "T11")
+        self.assertEqual(again.json()["sign"], "T12")
         signs = [car["sign"] for car in after.json()["cars"]]
-        self.assertEqual(signs, [f"T{index}" for index in range(1, 12)])
-        self.assertNotIn("T12", signs)
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 13)])
+        self.assertEqual(signs.count("T11"), 1)
+        self.assertEqual(signs.count("T12"), 1)
         self.assertEqual(before.json()["fare_in"], 0)
         self.assertEqual(after.json()["fare_in"], 0)
         self.assertEqual(before.json()["new_car"], 50_000)
@@ -886,14 +887,14 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(bought.status_code, 200)
         self.assertEqual(bought.json()["sign"], "T11")
         self.assertEqual(again.status_code, 200)
-        self.assertEqual(again.json()["sign"], "T11")
-        self.assertEqual(after["cash_pence"], paid_from - 50_000)
+        self.assertEqual(again.json()["sign"], "T12")
+        self.assertEqual(after["cash_pence"], paid_from - 100_000)
         self.assertEqual(after["fare_in"], 1040)
         self.assertNotEqual(after["fare_in"], 1040 - 800000)
         self.assertNotEqual(after["cash_pence"], 800000)
         self.assertEqual(after["new_car"], 50_000)
-        self.assertEqual([car["sign"] for car in after["cars"]], [f"T{index}" for index in range(1, 12)])
-        self.assertNotIn("T12", [car["sign"] for car in after["cars"]])
+        self.assertEqual([car["sign"] for car in after["cars"]], [f"T{index}" for index in range(1, 13)])
+        self.assertEqual([car["sign"] for car in after["cars"]].count("T12"), 1)
         self.assertEqual(other["cash_pence"], 0)
         self.assertEqual(other["fare_in"], 0)
         self.assertEqual(len(other["cars"]), 10)
@@ -1133,10 +1134,10 @@ class EmpireRegisterTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
         self.assertEqual(first.json()["sign"], "T11")
-        self.assertEqual(second.json()["sign"], "T11")
+        self.assertEqual(second.json()["sign"], "T12")
         self.assertEqual(signs.count("T11"), 1)
-        self.assertEqual(signs, [f"T{index}" for index in range(1, 12)])
-        self.assertNotIn("T12", signs)
+        self.assertEqual(signs.count("T12"), 1)
+        self.assertEqual(signs, [f"T{index}" for index in range(1, 13)])
         self.assertEqual(body["fare_in"], 0)
         self.assertNotEqual(body["fare_in"], 800000)
         self.assertNotEqual(body["fare_in"], 1_600_000)
@@ -1425,7 +1426,9 @@ class EmpireFleetTests(unittest.TestCase):
             empire.tick_all(same, session)
             coast = session.get(EmpireGame, "*npc-coast")
             held = (coast.loiter_lat, coast.loiter_lng, coast.loiter_km)
-            self.assertEqual([car.sign for car in empire._cars(session, "*npc-coast")], ["W1"])
+            coast_car = empire._cars(session, "*npc-coast")[0]
+            self.assertEqual(coast_car.sign, "W1")
+            self.assertNotEqual(coast_car.status, "at_depot")
             short_now = same + 1
             cars = empire._cars(session, "*npc-coast")
             coast.cash_pence = 0
@@ -1444,9 +1447,47 @@ class EmpireFleetTests(unittest.TestCase):
             cars = empire._cars(session, "*npc-coast")
             bal = empire.account_balance(coast, cars, buy_now)
             coast.cash_pence = int(coast.cash_pence or 0) + (empire.NEW_CAR_PENCE - bal) + 100_000
+            coast.fare_in = 0
             session.commit()
             empire.tick_all(buy_now, session)
+            self.assertEqual([car.sign for car in empire._cars(session, "*npc-coast")], ["W1"])
+            coast = session.get(EmpireGame, "*npc-coast")
+            for car in empire._cars(session, "*npc-coast"):
+                car.miles_driven = 0
+                car.status = "at_depot"
+                car.passenger = ""
+                car.fare_name = ""
+            coast.miles_driven = 0
+            coast.fare_in = 80_000
+            session.commit()
+            rich_now = buy_now + 1
+            self.assertGreater(
+                empire._firm_profit_pence(coast, empire._cars(session, "*npc-coast"), rich_now),
+                empire.STANDING_PENCE + empire.NPC_PROFIT_HEADROOM_PENCE,
+            )
+            empire.tick_all(rich_now, session)
             self.assertEqual([car.sign for car in empire._cars(session, "*npc-coast")], ["W1", "W2"])
+            coast = session.get(EmpireGame, "*npc-coast")
+            coast.fare_in = 0
+            coast.miles_driven = 0
+            for car in empire._cars(session, "*npc-coast"):
+                car.status = "at_depot"
+                car.passenger = ""
+                car.fare_name = ""
+                car.miles_driven = 0
+            session.commit()
+            loss_now = rich_now + 1
+            before_cash = int(coast.cash_pence or 0)
+            self.assertLess(
+                empire._firm_profit_pence(coast, empire._cars(session, "*npc-coast"), loss_now),
+                0,
+            )
+            empire.tick_all(loss_now, session)
+            self.assertEqual(len(empire._cars(session, "*npc-coast")), 1)
+            coast = session.get(EmpireGame, "*npc-coast")
+            self.assertEqual(int(coast.cash_pence or 0), before_cash + empire.SELL_CAR_PENCE)
+            empire.tick_all(loss_now + 1, session)
+            self.assertEqual(len(empire._cars(session, "*npc-coast")), 1)
             for key, house in empire.NPC_HOUSES.items():
                 if key == "*npc-coast":
                     continue
@@ -2517,20 +2558,24 @@ class EmpireFleetTests(unittest.TestCase):
             after = empire.snapshot("purse", NOW, session)
             again = empire.buy_car("purse", 800000, NOW, session)
             stayed = empire.snapshot("purse", NOW, session)
+            broke = empire.buy_car("purse", 800000, NOW, session)
             other = empire.snapshot("purseother", NOW, session)
         self.assertEqual(after["cash_pence"], paid_from - 50_000)
         self.assertEqual(after["fare_in"], 1040)
         self.assertEqual(after["standing"], 1500 * 11)
-        self.assertEqual(after["for_sale"], [])
+        self.assertEqual([row["sign"] for row in after["for_sale"]], ["T12"])
         self.assertEqual(
             after["balance"],
             after["cash_pence"] + after["fare_in"] - after["driver_share"] - after["fuel"] - after["standing"],
         )
         self.assertEqual(after["balance"], funded["balance"] - 50_000 - 1500)
         self.assertLess(after["balance"], 800000)
-        self.assertEqual(again, "T11")
-        self.assertEqual(stayed["cash_pence"], after["cash_pence"])
+        self.assertEqual(again, "T12")
+        self.assertEqual(stayed["cash_pence"], after["cash_pence"] - 50_000)
         self.assertEqual(len(after["cars"]), 11)
+        self.assertEqual(len(stayed["cars"]), 12)
+        self.assertIsNone(broke)
+        self.assertEqual([row["sign"] for row in stayed["for_sale"]], ["T13"])
         self.assertEqual(other["balance"], -15000)
         self.assertEqual(other["for_sale"][0]["sign"], "T11")
         self.assertEqual(len(other["cars"]), 10)
@@ -6348,8 +6393,10 @@ class EmpireFleetTests(unittest.TestCase):
                 if car.sign not in {"T2", "T3"}:
                     session.delete(car)
             session.commit()
-            self.assertFalse(empire.sell_car("seller", "T2", NOW, session))
-            self.assertEqual({car.sign for car in empire._cars(session, "seller")}, {"T2", "T3"})
+            self.assertTrue(empire.sell_car("seller", "T2", NOW, session))
+            self.assertEqual({car.sign for car in empire._cars(session, "seller")}, {"T3"})
+            self.assertFalse(empire.sell_car("seller", "T3", NOW, session))
+            self.assertEqual({car.sign for car in empire._cars(session, "seller")}, {"T3"})
             session.add(
                 EmpireCar(
                     username="seller",

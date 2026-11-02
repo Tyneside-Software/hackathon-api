@@ -43,6 +43,10 @@ STANDING_PENCE = 1500
 FUEL_PENCE_PER_MILE = 20
 NEW_CAR_PENCE = 50_000
 SELL_CAR_PENCE = 40_000
+# £100 left after the price, and £50 of profit still showing after the new taxi's standing.
+NPC_BUY_HEADROOM_PENCE = 10_000
+NPC_PROFIT_HEADROOM_PENCE = 5_000
+MAX_SIGN = 99
 # The old car price. A leaked 800000 is still not a fare. A real trip may cost 50000.
 NOT_A_FARE_PENCE = 800_000
 CHECK_S = 10
@@ -54,6 +58,8 @@ WORK_WEEK_S = 60 * 3600
 STINT_S = 4 * 3600
 BREAK_NEED_S = 3600
 MIN_WORKING = 2
+# One taxi stays, so a firm can sell every other free car.
+MIN_FLEET = 1
 DUTY_TICK_CAP_S = 5.0
 STAGGER_S = 7
 PICKUP_MILES = 1.2
@@ -93,7 +99,8 @@ SHARED_HOUSES = {
 }
 # Computer firms on the shared map. The star keeps the register form from accepting the name.
 # Ten companies in all: the three houses above, plus these seven.
-# A patch is chosen once per London day. The only other move is to buy one taxi when £500 is covered.
+# A patch is chosen once per London day. Spare cash buys another taxi when the firm
+# is in profit and still has headroom. A loss sells one free taxi. The last taxi stays.
 NPC_HOUSES = {
     "*npc-coast": {"company": "Coast Taxis", "prefix": "W", "place": "Whitley Bay", "colour": "#22d3ee"},
     "*npc-airport": {"company": "Airport Taxis", "prefix": "A", "place": "Newcastle Airport", "colour": "#a3e635"},
@@ -1367,9 +1374,9 @@ def firm_key(username: str, firm: str) -> str:
 
 
 def _people_key(username: str) -> str:
-    """Shared houses read one passenger queue. Every other account keeps its own."""
+    """Shared houses and NPC firms read one passenger queue. A solo account keeps its own."""
     account = _account_of(username)
-    if account in SHARED_HOUSES:
+    if account in SHARED_HOUSES or account in NPC_HOUSES:
         return WORLD
     return account
 
@@ -1379,10 +1386,37 @@ def _sign_index(sign: str) -> int:
     return int(tail) if tail.isdigit() else 0
 
 
+def _house_prefix(username: str) -> str:
+    house = SHARED_HOUSES.get(username) or NPC_HOUSES.get(username)
+    return house["prefix"] if house else "T"
+
+
 def _opening_sign(username: str, number: int) -> str:
-    house = SHARED_HOUSES.get(username)
-    prefix = house["prefix"] if house else "T"
-    return f"{prefix}{number}"
+    return f"{_house_prefix(username)}{number}"
+
+
+def _bought_colour(number: int) -> str:
+    return CARS[(max(int(number), 1) - 1) % len(CARS)][1]
+
+
+def _fleet_depot(username: str) -> tuple[float, float]:
+    """Where the next taxi of this firm waits. Solo accounts use Shiremoor."""
+    if username in NPC_HOUSES:
+        return npc_depot(username)
+    return house_depot(username)
+
+
+def _next_fleet_sign(username: str, cars: list[EmpireCar]) -> str | None:
+    """The next call sign. A gap from a sale is left. Sign 100 does not fit the column."""
+    prefix = _house_prefix(username)
+    numbers = [_sign_index(car.sign) for car in cars if (car.sign or "").startswith(prefix)]
+    number = (max(numbers) if numbers else 0) + 1
+    if number > MAX_SIGN:
+        return None
+    sign = f"{prefix}{number}"
+    if any(car.sign == sign for car in cars):
+        return None
+    return sign
 
 
 def house_depot(username: str) -> tuple[float, float]:
@@ -1526,19 +1560,83 @@ def _npc_refresh_loiter(game: EmpireGame, now: float) -> bool:
     return True
 
 
+def _firm_profit_pence(game: EmpireGame, cars: list[EmpireCar], now: float) -> int:
+    """Company share, after fuel and standing. Cash in the bank is not profit."""
+    fare = int(game.fare_in or 0)
+    done = float(game.miles_driven or 0)
+    miles = done + sum(driven_miles(car, now) for car in cars)
+    company = fare - driver_share_pence(fare)
+    return company - fuel_pence(miles) - STANDING_PENCE * len(cars)
+
+
+def _car_is_free(car: EmpireCar) -> bool:
+    """A taxi on a passenger job is not sold. An unpaid car is not owned."""
+    if car_is_for_sale(car):
+        return False
+    if car.status in ("to_passenger", "with_passenger") or car.passenger or car.fare_name:
+        return False
+    return True
+
+
+def _car_result_pence(car: EmpireCar, now: float) -> int:
+    """What this taxi has kept after its own fuel. Standing is a firm cost."""
+    fare = _car_fare(car)
+    miles = _car_miles(car) + driven_miles(car, now)
+    return (fare - driver_share_pence(fare)) - fuel_pence(miles)
+
+
+def _npc_sell_one(game: EmpireGame, session: Session, now: float) -> str | None:
+    """Sell the weakest free taxi. The last taxi stays. A passenger job stays."""
+    cars = [car for car in _cars(session, game.username) if not car_is_for_sale(car)]
+    if len(cars) <= MIN_FLEET:
+        return None
+    free = [car for car in cars if _car_is_free(car)]
+    if not free:
+        return None
+    free.sort(key=lambda car: (_car_result_pence(car, now), -_sign_index(car.sign)))
+    car = free[0]
+    for person in _people(session, _people_key(game.username)):
+        if person.sign == car.sign:
+            person.sign = ""
+    game.cash_pence = int(game.cash_pence or 0) + SELL_CAR_PENCE
+    session.delete(car)
+    session.flush()
+    return car.sign
+
+
+def _npc_sell_if_losing(game: EmpireGame, session: Session, now: float) -> str | None:
+    """One free taxi goes when the firm is losing. A single taxi keeps working."""
+    cars = _cars(session, game.username)
+    if len(cars) <= MIN_FLEET:
+        return None
+    if _firm_profit_pence(game, cars, now) >= 0:
+        return None
+    return _npc_sell_one(game, session, now)
+
+
+def _npc_buy_if_room(game: EmpireGame, session: Session, now: float) -> str | None:
+    """The first taxi needs the price. The next one needs profit and headroom."""
+    cars = _cars(session, game.username)
+    balance = account_balance(game, cars, now)
+    if not cars:
+        if balance < NEW_CAR_PENCE:
+            return None
+        return _npc_buy_one(game, session, now)
+    if _firm_profit_pence(game, cars, now) - STANDING_PENCE <= NPC_PROFIT_HEADROOM_PENCE:
+        return None
+    if balance < NEW_CAR_PENCE + NPC_BUY_HEADROOM_PENCE:
+        return None
+    return _npc_buy_one(game, session, now)
+
+
 def _npc_buy_one(game: EmpireGame, session: Session, now: float) -> str | None:
     """Buy one taxi when the balance covers the price. A short balance buys nothing."""
     cars = _cars(session, game.username)
     if account_balance(game, cars, now) < NEW_CAR_PENCE:
         return None
     house = NPC_HOUSES[game.username]
-    number = 1
-    if cars:
-        number = max(_sign_index(car.sign) for car in cars) + 1
-    if number > 99:
-        return None
-    sign = f"{house['prefix']}{number}"
-    if any(car.sign == sign for car in cars):
+    sign = _next_fleet_sign(game.username, cars)
+    if sign is None:
         return None
     depot = npc_depot(game.username)
     game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
@@ -2909,6 +3007,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
                     continue
                 npcs.append(npc)
                 _npc_refresh_loiter(npc, now)
+                _npc_sell_if_losing(npc, session, now)
             for game in shared:
                 for car in _cars(session, game.username):
                     try:
@@ -2935,7 +3034,7 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
                 _travel_to_a_better_spot(game, session, now)
             for npc in npcs:
                 _travel_to_a_better_spot(npc, session, now)
-                _npc_buy_one(npc, session, now)
+                _npc_buy_if_room(npc, session, now)
         session.commit()
     finally:
         if own_session:
@@ -2974,7 +3073,11 @@ def pay_new_car(car: EmpireCar, pence: int) -> bool:
 
 
 def buy_car(username: str, pence: int, now: float | None = None, session: Session | None = None) -> str | None:
-    """Spend the purchase price to add T11 when this account's money covers it. A smaller payment adds nothing."""
+    """Spend the purchase price on the next taxi when the balance covers it.
+
+    A smaller payment adds nothing. The posted pence is not the price: 800000 still
+    buys at the taxi price, and a second call buys the next sign when the money is there.
+    """
     if not new_car_may_leave(pence):
         return None
     username = normalise_username(username)
@@ -2985,28 +3088,28 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
         now = time.time()
     try:
         game = ensure_game(username, now, session)
-        bought = _opening_sign(username, 11)
         cars = _cars(session, username)
-        existing = next((car for car in cars if car.sign == bought), None)
-        if existing is not None and existing.depart_offset >= 0:
-            return bought
         if account_balance(game, cars, now) < NEW_CAR_PENCE:
             return None
-        if existing is not None:
-            existing.depart_offset = 0
-            existing.leg_started = now
-            existing.hold_until = now + DEPOT_PAUSE_S
+        unpaid = next((car for car in cars if car_is_for_sale(car)), None)
+        if unpaid is not None:
+            unpaid.depart_offset = 0
+            unpaid.leg_started = now
+            unpaid.hold_until = now + DEPOT_PAUSE_S
             game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
             session.commit()
-            return bought
+            return unpaid.sign
+        bought = _next_fleet_sign(username, cars)
+        if bought is None:
+            return None
         game.cash_pence = int(game.cash_pence or 0) - NEW_CAR_PENCE
-        home = house_depot(username)
+        home = _fleet_depot(username)
         at_shiremoor = home == DEPOT
         session.add(
             EmpireCar(
                 username=username,
                 sign=bought,
-                colour="#2dd4bf",
+                colour=_bought_colour(_sign_index(bought)),
                 status="at_depot",
                 job="waiting",
                 passenger="",
@@ -3035,7 +3138,7 @@ def buy_car(username: str, pence: int, now: float | None = None, session: Sessio
 def sell_car(username: str, sign: str, now: float | None = None, session: Session | None = None) -> bool:
     """Credit the sale price and remove an owned taxi.
 
-    A passenger job stays. An unpaid car stays. The last two taxis stay.
+    A passenger job stays. An unpaid car stays. The last taxi stays.
     A hail claimed but not collected is released.
     """
     username = normalise_username(username)
@@ -3056,7 +3159,7 @@ def sell_car(username: str, sign: str, now: float | None = None, session: Sessio
         if car.status in ("to_passenger", "with_passenger") or car.passenger or car.fare_name:
             return False
         owned = [item for item in cars if not car_is_for_sale(item)]
-        if len(owned) <= 2:
+        if len(owned) <= MIN_FLEET:
             return False
         for person in _people(session, _people_key(username)):
             if person.sign == car.sign:
@@ -3362,22 +3465,26 @@ def car_is_for_sale(car: EmpireCar) -> bool:
     return car.sign not in OPENING_SIGNS and float(car.depart_offset) < 0
 
 
-def for_sale_rows(cars: list[EmpireCar]) -> list[dict]:
-    """Taxis the account does not own yet. T11 waits at the depot until it is paid for."""
-    owned = {car.sign for car in cars}
+def for_sale_rows(cars: list[EmpireCar], username: str = "") -> list[dict]:
+    """The next taxi this account can buy, then any car that is still unpaid."""
     rows: list[dict] = []
-    if "T11" not in owned:
+    owned = [car for car in cars if not car_is_for_sale(car)]
+    sign = _next_fleet_sign(username, owned) if username else None
+    if sign:
+        home = _fleet_depot(username)
         rows.append(
             {
-                "sign": "T11",
-                "colour": "#2dd4bf",
-                "lat": DEPOT[0],
-                "lng": DEPOT[1],
+                "sign": sign,
+                "colour": _bought_colour(_sign_index(sign)),
+                "lat": home[0],
+                "lng": home[1],
                 "pence": NEW_CAR_PENCE,
             }
         )
     for car in cars:
         if not car_is_for_sale(car):
+            continue
+        if any(row["sign"] == car.sign for row in rows):
             continue
         rows.append(
             {
@@ -3611,7 +3718,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "standing": lines["standing"],
             "new_car": NEW_CAR_PENCE,
             "sell_car": SELL_CAR_PENCE,
-            "for_sale": for_sale_rows(cars),
+            "for_sale": for_sale_rows(cars, username),
         }
     finally:
         if own_session:

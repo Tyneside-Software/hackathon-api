@@ -60,7 +60,7 @@ def empire_buy(
     body: EmpireBuy,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> dict:
-    """Spend the purchase price to add T11 when the account can afford it. A smaller payment adds nothing."""
+    """Spend the purchase price on the next taxi when the account can afford it. A smaller payment adds nothing."""
     sign = buy_car(current_user.username, body.pence)
     if sign is None:
         if int(body.pence) < NEW_CAR_PENCE:
@@ -76,7 +76,7 @@ def empire_sell(
     body: EmpireSell,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> dict:
-    """Credit the sale price and remove an owned taxi. A passenger job and the last two stay."""
+    """Credit the sale price and remove an owned taxi. A passenger job and the last taxi stay."""
     if not sell_car(current_user.username, body.sign):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That taxi cannot be sold")
     return snapshot(current_user.username)
