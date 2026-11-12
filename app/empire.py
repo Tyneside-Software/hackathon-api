@@ -2004,32 +2004,34 @@ def _claim_closest(people: list[EmpirePerson], cars: list[EmpireCar], taken: set
     """
     pending = [person for person in people if not person.sign]
     free = [car for car in cars if car.sign not in taken and _can_take_a_hail(car)]
-    while pending and free:
-        best_rank = None
-        best_person = None
-        best_car = None
-        for person in pending:
-            pickup = (float(person.lat), float(person.lng))
-            for car in free:
-                distance = haversine_km(car_position(car), pickup)
-                if distance > CLAIM_RADIUS_KM:
-                    continue
-                rank = (
+    if not pending or not free:
+        return
+    origins = {car.sign: car_position(car) for car in free}
+    pairs: list[tuple] = []
+    for person in pending:
+        pickup = (float(person.lat), float(person.lng))
+        for car in free:
+            distance = haversine_km(origins[car.sign], pickup)
+            if distance > CLAIM_RADIUS_KM:
+                continue
+            pairs.append(
+                (
                     distance,
                     int(person.id or 0),
                     int(car.sign[1:]),
                     car.sign,
+                    person,
+                    car,
                 )
-                if best_rank is None or rank < best_rank:
-                    best_rank = rank
-                    best_person = person
-                    best_car = car
-        if best_person is None or best_car is None:
-            return
-        best_person.sign = best_car.sign
-        taken.add(best_car.sign)
-        pending.remove(best_person)
-        free.remove(best_car)
+            )
+    pairs.sort(key=lambda row: row[:4])
+    claimed_people: set[int] = set()
+    for _distance, person_id, _index, sign, person, car in pairs:
+        if person_id in claimed_people or sign in taken:
+            continue
+        person.sign = car.sign
+        taken.add(sign)
+        claimed_people.add(person_id)
 
 
 def _allocate_one_free_taxi(game: EmpireGame, session: Session) -> None:
@@ -3100,6 +3102,8 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
     _tick_thread_id = threading.get_ident()
     _batch_osrm = True
     _osrm_jobs.clear()
+    previous_autoflush = session.autoflush
+    session.autoflush = False
     try:
         games = list(session.scalars(select(EmpireGame)).all())
         shared = [game for game in games if game.username in SHARED_HOUSES]
@@ -3166,9 +3170,12 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             for npc in npcs:
                 _travel_to_a_better_spot(npc, session, now)
                 _npc_buy_if_room(npc, session, now)
+        if own_session:
+            session.commit()
         _flush_osrm_jobs()
         session.commit()
     finally:
+        session.autoflush = previous_autoflush
         _batch_osrm = False
         _tick_thread_id = 0
         _osrm_jobs.clear()
@@ -3757,6 +3764,8 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
     own_session = session is None
     if session is None:
         session = SessionLocal()
+    previous_autoflush = session.autoflush
+    session.autoflush = False
     try:
         game = ensure_game(username, now, session)
         cars = _cars(session, username)
@@ -3856,6 +3865,7 @@ def snapshot(username: str, now: float | None = None, session: Session | None = 
             "for_sale": for_sale_rows(cars, username),
         }
     finally:
+        session.autoflush = previous_autoflush
         if own_session:
             session.close()
 
