@@ -21,6 +21,7 @@ from typing import Callable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session
 
+from .config import OSRM_URL
 from .database import SessionLocal, normalise_username
 from .doors import depot_door, named_door, street_address
 from .models import EmpireCar, EmpireGame, EmpirePerson
@@ -149,11 +150,8 @@ RouteFn = Callable[[tuple[float, float], tuple[float, float]], dict | None]
 _route_fn: RouteFn | None = None
 _fault: Callable[[EmpireCar], bool] | None = None
 _clock: asyncio.Task | None = None
-# One writer thread for the whole tick (SQLite). A second pool fetches OSRM
-# routes in parallel; those calls are the slow part when many taxis start legs.
 _tick_pool: ThreadPoolExecutor | None = None
 _osrm_pool: ThreadPoolExecutor | None = None
-OSRM_WORKERS = 12
 _batch_osrm = False
 _tick_thread_id = 0
 _osrm_jobs: list[tuple[EmpireCar, tuple[float, float], tuple[float, float], str, float]] = []
@@ -181,19 +179,11 @@ def _empire_tick_pool() -> ThreadPoolExecutor:
     return _tick_pool
 
 
-def _empire_osrm_pool() -> ThreadPoolExecutor:
-    global _osrm_pool
-    if _osrm_pool is None:
-        _osrm_pool = ThreadPoolExecutor(max_workers=OSRM_WORKERS, thread_name_prefix="empire-osrm")
-    return _osrm_pool
-
-
 def start_clock() -> None:
     global _clock
     if clock_running():
         return
     _empire_tick_pool()
-    _empire_osrm_pool()
     _clock = asyncio.create_task(_clock_loop())
 
 
@@ -332,12 +322,14 @@ def _straight(start: tuple[float, float], end: tuple[float, float]) -> tuple[lis
 
 
 def ask_osrm(start: tuple[float, float], end: tuple[float, float]) -> dict | None:
+    if not OSRM_URL:
+        return None
     url = (
-        "https://router.project-osrm.org/route/v1/driving/"
+        f"{OSRM_URL}/route/v1/driving/"
         f"{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
     )
     try:
-        with urllib.request.urlopen(url, timeout=2) as resp:
+        with urllib.request.urlopen(url, timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
@@ -352,13 +344,11 @@ def ask_osrm(start: tuple[float, float], end: tuple[float, float]) -> dict | Non
     return {"points": points, "duration_s": float(duration) if duration else None}
 
 
-def build_route(start: tuple[float, float], end: tuple[float, float]) -> tuple[list, float, bool]:
-    fn = _route_fn if _route_fn is not None else ask_osrm
-    try:
-        got = fn(start, end)
-    except Exception:
-        log.exception("empire route failed")
-        got = None
+def _route_from_payload(
+    got: dict | None,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> tuple[list, float, bool]:
     if not got or not got.get("points"):
         return _straight(start, end)
     points = got["points"]
@@ -369,6 +359,16 @@ def build_route(start: tuple[float, float], end: tuple[float, float]) -> tuple[l
             miles += haversine_km(tuple(points[i]), tuple(points[i + 1])) / KM_PER_MILE
         duration = max(miles, 0.001) / MPH * 3600.0
     return points, float(duration), True
+
+
+def build_route(start: tuple[float, float], end: tuple[float, float]) -> tuple[list, float, bool]:
+    fn = _route_fn if _route_fn is not None else ask_osrm
+    try:
+        got = fn(start, end)
+    except Exception:
+        log.exception("empire route failed")
+        got = None
+    return _route_from_payload(got, start, end)
 
 
 def point_at(route: list, fraction: float) -> tuple[float, float]:
@@ -474,14 +474,16 @@ def _next_name(game: EmpireGame) -> str:
     return name
 
 
-def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tuple[float, float], now: float, status: str) -> None:
-    """Start the leg where the car already is. Do not snap the start back to Shiremoor.
-
-    A road route often finishes on the nearest road, short of the hail. The stored leg
-    still ends on the exact point, or the next tick treats the hunt as a far empty move
-    and starts it again from the same spot.
-    """
-    route, duration, osrm = build_route(start, end)
+def _apply_begin(
+    car: EmpireCar,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    now: float,
+    status: str,
+    route: list,
+    duration: float,
+    osrm: bool,
+) -> None:
     door = [float(end[0]), float(end[1])]
     if len(route) < 2:
         route = [[float(start[0]), float(start[1])], door]
@@ -499,6 +501,45 @@ def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tu
     car.leg_started = now
     car.osrm = osrm
     car.lat, car.lng = point_at(route, 0)
+
+
+def _begin(car: EmpireCar, game: EmpireGame, start: tuple[float, float], end: tuple[float, float], now: float, status: str) -> None:
+    """Start the leg where the car already is. Do not snap the start back to Shiremoor.
+
+    A road route often finishes on the nearest road, short of the hail. The stored leg
+    still ends on the exact point, or the next tick treats the hunt as a far empty move
+    and starts it again from the same spot.
+    """
+    if _route_fn is not None or not _batch_osrm or threading.get_ident() != _tick_thread_id:
+        route, duration, osrm = build_route(start, end)
+        _apply_begin(car, start, end, now, status, route, duration, osrm)
+        return
+    route, duration, osrm = _straight(start, end)
+    _apply_begin(car, start, end, now, status, route, duration, osrm)
+    _osrm_jobs.append((car, start, end, status, now))
+
+
+def _flush_osrm_jobs() -> None:
+    """Fetch this tick's roads together. One worker per job; no app-side cap."""
+    jobs = list(_osrm_jobs)
+    _osrm_jobs.clear()
+    if not jobs:
+        return
+    with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="empire-osrm") as pool:
+        futures = [pool.submit(ask_osrm, start, end) for _car, start, end, _status, _started in jobs]
+        for job, future in zip(jobs, futures):
+            car, start, end, status, started = job
+            try:
+                got = future.result(timeout=15)
+            except Exception:
+                log.exception("empire osrm wait failed")
+                continue
+            if car.status != status or float(car.leg_started) != float(started):
+                continue
+            route, duration, osrm = _route_from_payload(got, start, end)
+            if not osrm:
+                continue
+            _apply_begin(car, start, end, started, status, route, duration, osrm)
 
 
 HOMES = (
@@ -3050,11 +3091,15 @@ def _travel_to_a_better_spot(
 
 
 def tick_all(now: float | None = None, session: Session | None = None) -> None:
+    global _batch_osrm, _tick_thread_id
     if now is None:
         now = time.time()
     own_session = session is None
     if session is None:
         session = SessionLocal()
+    _tick_thread_id = threading.get_ident()
+    _batch_osrm = True
+    _osrm_jobs.clear()
     try:
         games = list(session.scalars(select(EmpireGame)).all())
         shared = [game for game in games if game.username in SHARED_HOUSES]
@@ -3121,8 +3166,12 @@ def tick_all(now: float | None = None, session: Session | None = None) -> None:
             for npc in npcs:
                 _travel_to_a_better_spot(npc, session, now)
                 _npc_buy_if_room(npc, session, now)
+        _flush_osrm_jobs()
         session.commit()
     finally:
+        _batch_osrm = False
+        _tick_thread_id = 0
+        _osrm_jobs.clear()
         if own_session:
             session.close()
 

@@ -63,3 +63,5 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "120"
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _default_db = os.path.join(_ROOT, "hackathon.db").replace("\\", "/")
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{_default_db}"
+# Empty means do not call the public demo (it rate-limits). Compose sets http://osrm:5000.
+OSRM_URL = os.getenv("OSRM_URL", "").rstrip("/")
