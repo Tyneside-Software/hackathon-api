@@ -11,8 +11,10 @@ import json
 import logging
 import math
 import random
+import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -147,6 +149,14 @@ RouteFn = Callable[[tuple[float, float], tuple[float, float]], dict | None]
 _route_fn: RouteFn | None = None
 _fault: Callable[[EmpireCar], bool] | None = None
 _clock: asyncio.Task | None = None
+# One writer thread for the whole tick (SQLite). A second pool fetches OSRM
+# routes in parallel; those calls are the slow part when many taxis start legs.
+_tick_pool: ThreadPoolExecutor | None = None
+_osrm_pool: ThreadPoolExecutor | None = None
+OSRM_WORKERS = 12
+_batch_osrm = False
+_tick_thread_id = 0
+_osrm_jobs: list[tuple[EmpireCar, tuple[float, float], tuple[float, float], str, float]] = []
 
 
 def set_route_fn(fn: RouteFn | None) -> None:
@@ -164,30 +174,70 @@ def clock_running() -> bool:
     return _clock is not None and not _clock.done()
 
 
+def _empire_tick_pool() -> ThreadPoolExecutor:
+    global _tick_pool
+    if _tick_pool is None:
+        _tick_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="empire-tick")
+    return _tick_pool
+
+
+def _empire_osrm_pool() -> ThreadPoolExecutor:
+    global _osrm_pool
+    if _osrm_pool is None:
+        _osrm_pool = ThreadPoolExecutor(max_workers=OSRM_WORKERS, thread_name_prefix="empire-osrm")
+    return _osrm_pool
+
+
 def start_clock() -> None:
     global _clock
     if clock_running():
         return
+    _empire_tick_pool()
+    _empire_osrm_pool()
     _clock = asyncio.create_task(_clock_loop())
 
 
 async def stop_clock() -> None:
-    global _clock
+    global _clock, _tick_pool, _osrm_pool
     task = _clock
     _clock = None
-    if task is None:
-        return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    if _tick_pool is not None:
+        _tick_pool.shutdown(wait=False, cancel_futures=True)
+        _tick_pool = None
+    if _osrm_pool is not None:
+        _osrm_pool.shutdown(wait=False, cancel_futures=True)
+        _osrm_pool = None
 
 
 async def _clock_loop() -> None:
+    # asyncio.to_thread really does use a thread. The lag is that one tick still
+    # walks every taxi in that single thread, and each new leg waited on OSRM.
+    # Ticks stay on a one-worker pool (one SQLite writer). OSRM runs on another.
+    await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+
     while True:
         try:
-            tick_all(time.time())
+            response = await asyncio.to_thread(
+                urllib.request.urlopen,
+                "http://127.0.0.1:8080/health",
+                timeout=3,
+            )
+            response.close()
+            break
+        except OSError:
+            log.warning("waiting for FastAPI to start")
+            await asyncio.sleep(1)
+
+    while True:
+        try:
+            await loop.run_in_executor(_empire_tick_pool(), tick_all, time.time())
         except Exception:
             log.exception("empire tick failed")
         await asyncio.sleep(1)
@@ -1861,6 +1911,9 @@ def _ensure_waiting_person(game: EmpireGame, session: Session, now: float) -> No
     _release_unclaimed(session, game.username, now)
     target = spell_target(game.username, now)
     have = len(_people(session, game.username))
+    gap = target - have
+    if gap >= 50:
+        log.info("empire filling %s standing hails for %s", gap, game.username)
     added = False
     attempts = 0
     while have < target and attempts < target + 64:
